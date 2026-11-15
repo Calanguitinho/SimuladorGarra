@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DentalGrip Studio — MuJoCo + Clínica Odontológica 3D</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="top-bar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span>DentalGrip Studio</span>
+        <span class="brand-sub">MuJoCo · Clínica 3D</span>
+      </div>
+
+      <div class="ws-endpoint-bar">
+        <input id="ws-url-input" type="text" spellcheck="false" aria-label="WebSocket Backend URL" placeholder="ws://localhost:8000/ws" />
+        <button id="ws-connect-btn" class="btn btn-primary btn-sm" type="button">Conectar</button>
+      </div>
+
+      <div class="metrics-strip">
+        <span id="conn-badge" class="badge status-disconnected">WS: <strong>INIT</strong></span>
+        <span class="badge">Render: <strong id="render-fps-val">60</strong> FPS</span>
+        <span class="badge">Physics: <strong id="sim-fps-val">60</strong> Hz</span>
+        <span class="badge">Latência: <strong id="latency-val">-- ms</strong></span>
+        <span class="badge">Motor: <strong id="engine-val">mujoco</strong></span>
+      </div>
+    </header>
+
+    <main class="workspace-grid">
+      <section class="viewport-pane">
+        <div class="camera-toolbar">
+          <button class="cam-btn" data-cam="iso" type="button">Órbita 3D</button>
+          <button class="cam-btn" data-cam="top" type="button">Topo (XY)</button>
+          <button class="cam-btn" data-cam="front" type="button">Frente (XZ)</button>
+          <button class="cam-btn" data-cam="side" type="button">Lateral (YZ)</button>
+        </div>
+
+        <div id="fallback-banner" class="fallback-banner hidden">
+          Modo Fallback Ativo — Exibindo último estado conhecido (tentando reconectar...)
+        </div>
+
+        <div id="scene-loading" class="scene-loading">
+          <div class="scene-loading-card">
+            <div class="scene-loading-spinner"></div>
+            <div>Carregando clínica odontológica 3D…</div>
+            <div class="scene-loading-hint">cadeira · bandeja · instrumentos · garra MuJoCo</div>
+          </div>
+        </div>
+
+        <canvas id="sim-canvas"></canvas>
+
+        <div class="hud-overlay">
+          <div>TCP Pos  : <span id="hud-pos" class="val">[0.000, 0.000, 0.238] m</span></div>
+          <div>TCP Quat : <span id="hud-quat" class="val">[1.00, 0.00, 0.00, 0.00]</span></div>
+          <div>Abertura : <span id="hud-aperture" class="val">80.0 mm (ABERTA)</span></div>
+          <div>Preensão : <span id="hud-grasp" class="val">Livre</span></div>
+        </div>
+      </section>
+
+      <aside class="control-sidebar">
+        <div class="card glass-card">
+          <div class="card-title">
+            <span>Controle Cartesiano &amp; Dedos</span>
+            <span>WASD / QE</span>
+          </div>
+
+          <div class="jog-layout">
+            <div class="xy-pad">
+              <div></div>
+              <button class="btn" data-command="move_forward" title="Tecla W" type="button">▲ Frente</button>
+              <div></div>
+              <button class="btn" data-command="move_left" title="Tecla A" type="button">◀ Esq</button>
+              <div class="pad-center-label">XY</div>
+              <button class="btn" data-command="move_right" title="Tecla D" type="button">Dir ▶</button>
+              <div></div>
+              <button class="btn" data-command="move_backward" title="Tecla S" type="button">▼ Trás</button>
+              <div></div>
+            </div>
+            <div class="z-pad">
+              <button class="btn" data-command="move_up" title="Tecla E" type="button">⬆ Subir (+Z)</button>
+              <button class="btn" data-command="move_down" title="Tecla Q" type="button">⬇ Descer (-Z)</button>
+            </div>
+          </div>
+
+          <div class="jaw-row">
+            <button class="btn btn-amber" data-command="close" type="button">▶◀ Fechar</button>
+            <button class="btn btn-green" data-command="open" type="button">◀▶ Abrir</button>
+          </div>
+
+          <div class="action-row">
+            <button id="btn-demo-pick" class="btn btn-primary" type="button" title="Pegar Instrumento Dental NIH3D e levar à zona verde">Pegar Instrumento</button>
+            <button id="btn-demo-floss" class="btn btn-primary" type="button" title="Pegar Suporte de Fio Dental e levar à zona verde">Pegar Fio Dental</button>
+            <button id="btn-reset" class="btn" type="button">Resetar</button>
+          </div>
+        </div>
+
+        <div class="card glass-card">
+          <div class="card-title"><span>Parâmetros Dinâmicos</span></div>
+          <div class="slider-group">
+            <div class="slider-header">
+              <label for="speed-slider">Velocidade (speed)</label>
+              <output id="speed-out" for="speed-slider">0.50 m/s</output>
+            </div>
+            <input id="speed-slider" type="range" min="0.05" max="1.50" step="0.05" value="0.50" />
+          </div>
+          <div class="slider-group">
+            <div class="slider-header">
+              <label for="force-slider">Força (force)</label>
+              <output id="force-out" for="force-slider">50 N</output>
+            </div>
+            <input id="force-slider" type="range" min="1" max="100" step="1" value="50" />
+          </div>
+        </div>
+
+        <div class="card glass-card">
+          <div class="card-title"><span>Assets da Clínica</span></div>
+          <ul class="asset-list">
+            <li>Cadeira odontológica (GLB)</li>
+            <li>Bandeja metálica (GLB)</li>
+            <li>Kit de instrumentos (GLB)</li>
+            <li>Instrumento NIH3D (STL · física)</li>
+            <li>Suporte de fio dental (STL · física)</li>
+            <li>Braço UR5e + Robotiq 2F-85</li>
+          </ul>
+        </div>
+
+        <div class="card glass-card">
+          <div class="card-title"><span>Sensores MuJoCo</span></div>
+          <div class="sensor-grid">
+            <div class="sensor-box">
+              <div class="sensor-label">Dedo Esq.</div>
+              <div id="left-touch-val" class="sensor-val">0.0 N</div>
+              <div class="meter-track"><div id="left-touch-bar" class="meter-fill"></div></div>
+            </div>
+            <div class="sensor-box">
+              <div class="sensor-label">Dedo Dir.</div>
+              <div id="right-touch-val" class="sensor-val">0.0 N</div>
+              <div class="meter-track"><div id="right-touch-bar" class="meter-fill"></div></div>
+            </div>
+            <div class="sensor-box">
+              <div class="sensor-label">Força Ativa</div>
+              <div id="total-force-val" class="sensor-val">50.0 N</div>
+            </div>
+            <div class="sensor-box">
+              <div class="sensor-label">Punho [Fx,Fy,Fz]</div>
+              <div id="wrist-force-val" class="sensor-val">[0.0, 0.0, 0.0]</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card glass-card">
+          <div class="card-title"><span>Telemetria</span></div>
+          <div id="telemetry-log" class="log-console"></div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="js/websocket_client.js"></script>
+  <script src="js/renderer.js"></script>
+  <script src="js/controls.js"></script>
+  <script type="module" src="js/dental_scene.js"></script>
+</body>
+</html>

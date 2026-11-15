@@ -1,0 +1,105 @@
+<mujoco model="production_parallel_gripper">
+  <!-- meshdir aponta para assets/objetos/odontologia (STL dental NIH3D) -->
+  <compiler angle="degree" coordinate="local" inertiafromgeom="true"
+            meshdir="../../assets/objetos/odontologia"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast" cone="elliptic" impratio="10">
+    <flag warmstart="enable"/>
+  </option>
+
+  <default>
+    <geom contype="1" conaffinity="1" condim="4" friction="1.4 0.02 0.004" solref="0.01 1" solimp="0.92 0.98 0.001"/>
+    <joint limited="true" armature="0.05"/>
+  </default>
+
+  <visual>
+    <headlight ambient="0.35 0.38 0.42" diffuse="0.70 0.72 0.76" specular="0.25 0.25 0.25"/>
+  </visual>
+
+  <asset>
+    <!-- Instrumento dental (STL em mm → escala 0.001 para metros) -->
+    <mesh name="dental_tool_mesh" file="dental_tool-nih3d.stl" scale="0.001 0.001 0.001"/>
+  </asset>
+
+  <worldbody>
+    <light name="top_key_light" directional="true" pos="0.2 -0.3 1.8" dir="-0.1 0.15 -1" diffuse="0.85 0.87 0.90"/>
+    <light name="fill_light" directional="true" pos="-0.5 0.5 1.4" dir="0.2 -0.2 -1" diffuse="0.35 0.40 0.48"/>
+
+    <!-- Workbench surface and target drop zone -->
+    <geom name="workbench" type="plane" pos="0 0 0" size="0.75 0.75 0.05" rgba="0.14 0.17 0.22 1" friction="1.3 0.02 0.003"/>
+    <!-- Entrega ao lado da cadeira, no posto do dentista -->
+    <site name="drop_zone" type="box" pos="-0.30 0.26 0.0015" size="0.07 0.07 0.0015" rgba="0.16 0.78 0.44 0.45"/>
+
+    <!-- 3-DOF Cartesian Gantry + Parallel-Jaw Robotic Gripper -->
+    <body name="gripper_carriage" pos="0 0 0.30" gravcomp="1">
+      <joint name="joint_x" type="slide" axis="1 0 0" range="-0.45 0.45" damping="48" armature="0.08"/>
+      <joint name="joint_y" type="slide" axis="0 1 0" range="-0.45 0.45" damping="48" armature="0.08"/>
+      <joint name="joint_z" type="slide" axis="0 0 1" range="-0.215 0.25" damping="58" armature="0.10"/>
+
+      <geom name="carriage_mount" type="cylinder" pos="0 0 0.038" size="0.024 0.022" mass="0.35" rgba="0.28 0.33 0.40 1"/>
+      <site name="wrist_sensor_site" pos="0 0 0.016" size="0.01"/>
+
+      <body name="gripper_palm" pos="0 0 0" gravcomp="1">
+        <geom name="palm_housing" type="box" pos="0 0 0" size="0.056 0.028 0.018" mass="0.45" rgba="0.18 0.46 0.86 1"/>
+        <site name="tcp_site" pos="0 0 -0.062" size="0.006" rgba="0.98 0.82 0.20 0.8"/>
+
+        <!-- Left Parallel Jaw -->
+        <body name="left_finger" pos="-0.048 0 -0.052" gravcomp="1">
+          <joint name="joint_finger_left" type="slide" axis="1 0 0" range="0.0 0.040" damping="18" armature="0.02"/>
+          <geom name="left_finger_strut" type="box" pos="-0.004 0 0.012" size="0.007 0.016 0.024" mass="0.08" rgba="0.34 0.39 0.47 1"/>
+          <geom name="left_finger_pad" type="box" pos="0.003 0 -0.010" size="0.005 0.018 0.024" mass="0.04"
+                friction="2.4 0.06 0.01" solref="0.006 1" solimp="0.96 0.995 0.0005" rgba="0.95 0.62 0.14 1"/>
+          <site name="left_touch_site" type="box" pos="0.004 0 -0.010" size="0.0055 0.019 0.025" rgba="1 0.5 0 0.0"/>
+        </body>
+
+        <!-- Right Parallel Jaw -->
+        <body name="right_finger" pos="0.048 0 -0.052" gravcomp="1">
+          <joint name="joint_finger_right" type="slide" axis="-1 0 0" range="0.0 0.040" damping="18" armature="0.02"/>
+          <geom name="right_finger_strut" type="box" pos="0.004 0 0.012" size="0.007 0.016 0.024" mass="0.08" rgba="0.34 0.39 0.47 1"/>
+          <geom name="right_finger_pad" type="box" pos="-0.003 0 -0.010" size="0.005 0.018 0.024" mass="0.04"
+                friction="2.4 0.06 0.01" solref="0.006 1" solimp="0.96 0.995 0.0005" rgba="0.95 0.62 0.14 1"/>
+          <site name="right_touch_site" type="box" pos="-0.004 0 -0.010" size="0.0055 0.019 0.025" rgba="1 0.5 0 0.0"/>
+        </body>
+      </body>
+    </body>
+
+    <!-- Instrumento sobre a bandeja (eixo longo no XY, alcance da garra) -->
+    <body name="dental_tool" pos="0.28 -0.16 0.018" euler="0 90 0">
+      <freejoint name="dental_tool_joint"/>
+      <geom name="dental_tool_geom" type="mesh" mesh="dental_tool_mesh" mass="0.045"
+            friction="2.2 0.05 0.01" rgba="0.78 0.82 0.86 1" condim="4"/>
+    </body>
+  </worldbody>
+
+  <!-- Symmetric jaw coupling -->
+  <equality>
+    <joint name="jaw_symmetry" joint1="joint_finger_left" joint2="joint_finger_right" polycoef="0 1 0 0 0"/>
+  </equality>
+
+  <!-- Position & Force-Limited Servo Actuators -->
+  <actuator>
+    <position name="act_x" joint="joint_x" kp="680" kv="54" ctrlrange="-0.45 0.45" forcerange="-160 160"/>
+    <position name="act_y" joint="joint_y" kp="680" kv="54" ctrlrange="-0.45 0.45" forcerange="-160 160"/>
+    <position name="act_z" joint="joint_z" kp="780" kv="64" ctrlrange="-0.215 0.25" forcerange="-200 200"/>
+    <position name="act_finger_left" joint="joint_finger_left" kp="2800" kv="24" ctrlrange="0.0 0.040" forcerange="-100 100"/>
+    <position name="act_finger_right" joint="joint_finger_right" kp="2800" kv="24" ctrlrange="0.0 0.040" forcerange="-100 100"/>
+  </actuator>
+
+  <!-- Force, Touch, Joint & Cartesian Pose Sensors -->
+  <sensor>
+    <framepos name="tcp_pos" objtype="site" objname="tcp_site"/>
+    <framequat name="tcp_quat" objtype="site" objname="tcp_site"/>
+    <force name="wrist_force" site="wrist_sensor_site"/>
+    <torque name="wrist_torque" site="wrist_sensor_site"/>
+    <touch name="left_finger_touch" site="left_touch_site"/>
+    <touch name="right_finger_touch" site="right_touch_site"/>
+    <jointpos name="jpos_x" joint="joint_x"/>
+    <jointpos name="jpos_y" joint="joint_y"/>
+    <jointpos name="jpos_z" joint="joint_z"/>
+    <jointpos name="jpos_finger_l" joint="joint_finger_left"/>
+    <jointpos name="jpos_finger_r" joint="joint_finger_right"/>
+    <jointvel name="jvel_x" joint="joint_x"/>
+    <jointvel name="jvel_y" joint="joint_y"/>
+    <jointvel name="jvel_z" joint="joint_z"/>
+  </sensor>
+</mujoco>

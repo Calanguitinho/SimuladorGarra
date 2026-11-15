@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Logs & runtime
+logs/
+*.log
+MUJOCO_LOG.TXT
+
+# IDE / local tooling
+.idea/
+.vscode/
+.cursor/
+.claude/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Optional local artifacts (keep tracked screenshots if desired — uncomment to ignore)
+# artifacts/

@@ -1,0 +1,20 @@
+{
+  "name": "simulador-garra-3d-frontend",
+  "version": "1.0.0",
+  "description": "Browser-based 3D WebGL visualizer for the Python MuJoCo Gripper Simulator over 60 FPS WebSocket",
+  "private": true,
+  "scripts": {
+    "build": "python3 scripts/bundle_frontend.py",
+    "start": "python3 main.py --port 8000",
+    "test": "python3 main.py --scenario all"
+  },
+  "keywords": [
+    "robotics",
+    "mujoco",
+    "gripper",
+    "websocket",
+    "webgl",
+    "3d-simulation"
+  ],
+  "license": "MIT"
+}
