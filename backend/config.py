@@ -82,6 +82,7 @@ class VisionConfig:
     stable_frames: int = 3
     stability_m: float = 0.008
     enable_pick: bool = False
+    pick_max_attempts: int = 2
     allowed_classes: Tuple[str, ...] = ("dental_tool", "floss_holder")
 
     def __post_init__(self) -> None:
@@ -95,6 +96,10 @@ class VisionConfig:
                 raise ValueError(f"Configuração de visão inválida: {name}")
         if self.target_fps > 60 or self.confidence_threshold > 1 or self.stable_frames < 1 or not 1 <= self.cpu_threads <= 32:
             raise ValueError("FPS, confiança ou estabilidade de visão inválidos.")
+        if (isinstance(self.pick_max_attempts, bool)
+                or not isinstance(self.pick_max_attempts, int)
+                or self.pick_max_attempts < 1):
+            raise ValueError("pick_max_attempts deve ser pelo menos 1.")
 
 
 @dataclass(frozen=True)

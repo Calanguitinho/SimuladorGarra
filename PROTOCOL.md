@@ -48,9 +48,9 @@ O WebSocket aceita o formato equivalente `{"type":"instruction","text":"..."}` e
 | `GET /api/vision/status` e `/api/vision/detections` | Somente leitura; nunca acionam a câmera. Incluem `operation`, `request_active`, `request_id`, `requested_class`, `frames_captured`, `allowed_classes` e `can_request_pick` |
 | `GET /api/vision/frame?frame_id=125` | JPEG de uma coleta já solicitada; não produz nova imagem; 404 se saiu do cache ou houve reset |
 | WS `vision` | Atualizações da solicitação e resultados; inclui estado `idle`/`detecting` e estados de resultado `ready`/`stale`/`error`, além de `disabled` |
-| WS `vision_pick_status` | `operation_id`, classe solicitada, etapa, erro, alvo estimado, plano e plano restante após revalidação |
+| WS `vision_pick_status` | `operation_id`, classe solicitada, etapa, erro, alvo estimado, plano, plano restante e campos `attempt`, `max_attempts`, `last_failure` e `recovered` |
 
-O `ack` confirma recebimento. A conclusão é informada pela operação: `detecting`, `planning`, `approaching`, `revalidating`, `aligning`, `descending`, `closing`, `lifting`, `delivering`, `lowering`, `retreating`, com terminais `completed`, `failed` ou `cancelled`.
+O `ack` confirma recebimento. A conclusão é informada pela operação: `detecting`, `planning`, `approaching`, `revalidating`, `aligning`, `descending`, `closing`, `lifting`, `delivering`, `lowering`, `retreating` e `recovering`, com terminais `completed`, `failed` ou `cancelled`. Falhas de detecção, revalidação e preensão podem iniciar nova tentativa; a recuperação abre a garra, retorna à pose segura e solicita uma observação nova. Cancelamento e erros de simulação não são repetidos.
 
 As detecções mantêm caixa em pixels, classe, confiança, estabilidade e candidato em metros. O cache contém no máximo quatro quadros. A idade usa relógio monotônico e continua sendo validada antes de usar um resultado. Uma imagem antiga pode permanecer no preview como última observação; isso não mantém a visão capturando.
 
