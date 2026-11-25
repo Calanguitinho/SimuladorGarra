@@ -133,6 +133,16 @@ def _fallback(text: str, allowed_classes: tuple[str, ...]) -> dict[str, Any]:
     return result
 
 
+def interpret_keywords(text: str, allowed_classes: Iterable[str]) -> dict[str, Any]:
+    """Executa somente o fallback determinístico, sem tentar acessar a rede."""
+    classes = tuple(dict.fromkeys(name for name in allowed_classes if isinstance(name, str)))
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT_LENGTH:
+        result = _clarification(classes, "Envie uma instrução curta e indique a ferramenta desejada.")
+        result["source"] = "keyword"
+        return result
+    return _fallback(text, classes)
+
+
 def _gemini_response_text(response: Any) -> str:
     candidates = response.get("candidates")
     if not isinstance(candidates, list) or not candidates:
@@ -239,7 +249,7 @@ def interpret(
 
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
-        return _fallback(text, classes)
+        return interpret_keywords(text, classes)
 
     try:
         parsed = _call_gemini(text, classes, api_key)
