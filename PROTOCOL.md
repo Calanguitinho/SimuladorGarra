@@ -22,6 +22,27 @@ Para diagnóstico sem movimento, há um comando explícito separado:
 
 `vision_cancel` cancela a operação e/ou solicitação de visão; `reset` também invalida a revisão. Uma inferência que já começou pode terminar, mas seu resultado cancelado não é publicado nem usado por outra operação.
 
+### Instruções em linguagem natural
+
+O endpoint aceita uma frase de até 300 caracteres e só inicia uma captura quando a tarefa estruturada identifica uma classe permitida sem pedir esclarecimento. O Gemini é opcional; sem a chave ou diante de indisponibilidade, o backend usa o interpretador local por palavras-chave.
+
+```http
+POST /api/instruction
+Content-Type: application/json
+
+{"text":"Me passe o instrumento dental"}
+```
+
+A resposta mantém a interpretação, a aceitação, o status atual de `vision_pick` e um erro opcional:
+
+```json
+{"task":{"intent":"fetch","class_name":"dental_tool","confidence":0.82,"needs_clarification":false,"clarification":null,"source":"keyword"},"accepted":true,"status":{"type":"vision_pick_status","stage":"detecting"},"error":null}
+```
+
+Um pedido ambíguo retorna HTTP 200 com `accepted:false` e a pergunta em `task.clarification`; a entrada inválida retorna 400, a captura ocupada retorna 409 e visão/captura desabilitada retorna 503. Nenhuma tarefa com esclarecimento movimenta o braço. O servidor registra tentativa, interpretação, resultado final e duração em `artifacts/nl_log.jsonl`.
+
+O WebSocket aceita o formato equivalente `{"type":"instruction","text":"..."}` e responde com `type:"instruction_result"`, os mesmos campos da resposta HTTP e `http_status` com o status correspondente.
+
 | Interface | Contrato |
 | --- | --- |
 | `GET /api/vision/status` e `/api/vision/detections` | Somente leitura; nunca acionam a câmera. Incluem `operation`, `request_active`, `request_id`, `requested_class`, `frames_captured`, `allowed_classes` e `can_request_pick` |
@@ -160,4 +181,5 @@ Na mesma porta TCP (`8000` por padrão), o servidor expõe endpoints REST compat
 - `GET /health` — Status operacional, motor físico ativo, FPS medido, clientes conectados e uptime.
 - `GET /api/state` — Snapshot imediato `{"state": ...}` via HTTP.
 - `POST /api/command` — Executa comando JSON (mesmo payload do WebSocket) e retorna `{"state": ...}`.
+- `POST /api/instruction` — Interpreta texto em uma tarefa permitida e inicia `vision_pick` somente quando não houver ambiguidade.
 - `POST /api/reset` — Reinicia a simulação MuJoCo para o estado inicial.
