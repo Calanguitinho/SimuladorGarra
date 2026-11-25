@@ -2,6 +2,20 @@
 
 Este documento descreve a arquitetura interna do **SimuladorGarra**, os contratos de dados estilo socket, o gerenciamento de estado transacional e o roteiro técnico para conectar o código diretamente a um braço/garra robótica física.
 
+## Fluxo ativo: backend web e percepção YOLO
+
+A execução normal de `main.py` usa `backend/main.py`, `GripperWebSocketServer` e `MuJoCoGripperEnv`. As seções abaixo sobre `CODIGO/` e `FUNCOES/` descrevem a arquitetura legada, acessada pelos modos compatíveis da CLI.
+
+No motor nativo, `backend/clinic_model.py` constrói UR5e, Robotiq, instrumentos e câmera fixa `vision_top` com `MjSpec`. O `.mjcf` legado é validado na inicialização, mas não constrói essa cena. A câmera orbital Three.js não participa da percepção.
+
+`VisionService` possui uma thread dedicada que aguarda uma solicitação, sem abrir câmera ou executar inferência em repouso. O comando `vision_pick` por classe é recebido por `VisionPick`, que chama a visão e aguarda uma coleta finita para estabilidade. Somente depois de validar o resultado calcula o plano e comanda o controlador.
+
+A câmera, o detector e a geometria são inicializados na primeira solicitação e reutilizados. Cada coleta copia `MjData` sob lock breve e renderiza na thread proprietária do contexto. O cache mantém no máximo quatro quadros. Uma segunda solicitação pontual revalida o alvo após a aproximação; ao terminar cada solicitação o worker volta a esperar. O frontend consulta resultados, sem acionar novas capturas.
+
+`VisionPick` aguarda condições físicas e exclui comandos conflitantes. Reset/cancelamento invalidam a solicitação pendente; resultados tardios não são publicados nem iniciam movimento. A interface envia classes de ferramentas, sem consultar `objects[].grasp_pos`. A captura exige o perfil de pesos/calibração validado e `--vision-enable-pick`.
+
+Para fontes, contratos, limitações e critérios de aceitação, consulte [YOLO_INTEGRATION.md](./YOLO_INTEGRATION.md) e [PROTOCOL.md](./PROTOCOL.md).
+
 ---
 
 ## 1. Visão Arquitetural em Camadas (Modular Socket-Style)

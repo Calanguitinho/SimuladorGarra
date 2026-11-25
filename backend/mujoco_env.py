@@ -104,6 +104,7 @@ class MuJoCoGripperEnv:
         self._commanded_force: float = self.config.gripper.default_force
         self._is_closed: bool = False
         self._seq: int = 0
+        self.scene_revision: int = 0
         self._sim_time: float = 0.0
         self._substep_counter: int = 0
 
@@ -266,6 +267,7 @@ class MuJoCoGripperEnv:
     def reset(self) -> Dict[str, Any]:
         """Restaura toda a simulação para o estado inicial."""
         with self._lock:
+            self.scene_revision += 1
             self._target_ctrl = [0.0, 0.0, 0.0, 0.0]
             self._current_ctrl = [0.0, 0.0, 0.0, 0.0]
             self._waypoints = []
@@ -355,6 +357,9 @@ class MuJoCoGripperEnv:
     ) -> None:
         """Define coordenadas cartesianas absolutas do TCP com desvio automático da base."""
         gcfg = self.config.gripper
+        for value in (x, y, tcp_z, speed, force):
+            if value is not None and not math.isfinite(float(value)):
+                raise ValueError("Alvo, velocidade e força devem ser finitos.")
         with self._lock:
             if speed is not None:
                 self._active_speed = _clamp(float(speed), gcfg.min_speed, gcfg.max_speed)
@@ -381,6 +386,22 @@ class MuJoCoGripperEnv:
                 else:
                     self._target_ctrl[3] = 0.040 if self._is_closed else 0.0
             self._apply_actuator_force_limits()
+
+    def copy_vision_state(self, destination: Any) -> tuple[int, float]:
+        """Copia o estado vivo brevemente sob lock; o renderer usa só a cópia."""
+        if self._model is None:
+            raise RuntimeError("Visão requer o motor MuJoCo nativo.")
+        with self._lock:
+            mujoco.mj_copyData(destination, self._model, self._data)
+            return self.scene_revision, float(self._data.time)
+
+    def hold_position(self) -> None:
+        """Interrompe a trajetória mantendo o comando atual dos dedos."""
+        with self._lock:
+            pos = self.get_state_snapshot()["pos"]
+            self._target_ctrl[:3] = pos
+            self._current_ctrl[:3] = pos
+            self._waypoints = []
 
     def _apply_actuator_force_limits(self) -> None:
         """Propaga a força solicitada aos atuadores dos dedos no modelo MuJoCo."""

@@ -10,6 +10,7 @@ from scenarios import (
     test_object_interaction,
     test_real_time_sync,
     test_stress,
+    test_vision_integration,
 )
 
 SCENARIO_MAP: Dict[str, Callable[[], Dict[str, Any]]] = {
@@ -17,6 +18,7 @@ SCENARIO_MAP: Dict[str, Callable[[], Dict[str, Any]]] = {
     "real_time_sync": test_real_time_sync.run_scenario,
     "object_interaction": test_object_interaction.run_scenario,
     "stress": test_stress.run_scenario,
+    "vision": test_vision_integration.run_scenario,
 }
 
 

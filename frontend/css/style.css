@@ -589,3 +589,18 @@ input[type="range"] {
     border-top: 1px solid var(--border-subtle);
   }
 }
+/* A imagem e o overlay compartilham o mesmo canvas e a mesma escala. */
+.vision-card { min-width: 0; }
+.vision-canvas { display: block; width: 100%; height: auto; background: #111827; border-radius: 8px; }
+.vision-status, .vision-operation { font-size: 12px; overflow-wrap: anywhere; }
+.vision-status {
+  height: 4.5em;
+  flex-shrink: 0;
+  line-height: 1.5;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.vision-target { display: block; width: 100%; margin: 8px 0; padding: 8px; color: var(--text-primary); background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 6px; }
+.vision-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.vision-actions button { padding: 8px; cursor: pointer; color: var(--text-primary); background: var(--accent-blue); border: 1px solid var(--border-subtle); border-radius: 6px; }
+.vision-actions button:disabled { opacity: .5; cursor: default; }

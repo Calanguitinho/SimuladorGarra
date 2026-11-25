@@ -1,0 +1,16 @@
+# YOLO compacto para câmera fixa/CPU. Sem pesos pré-treinados.
+# Uma cabeça stride 8 preserva resolução para instrumentos estreitos.
+nc: 2
+backbone:
+  - [-1, 1, Conv, [8, 3, 2]]
+  - [-1, 1, Conv, [16, 3, 2]]
+  - [-1, 1, C2f, [16]]
+  - [-1, 1, Conv, [32, 3, 2]]
+  - [-1, 1, C2f, [32]]
+  - [-1, 1, Conv, [64, 3, 2]]
+  - [-1, 1, C2f, [64]]
+head:
+  - [-1, 1, nn.Upsample, [null, 2, nearest]]
+  - [[-1, 4], 1, Concat, [1]]
+  - [-1, 1, C2f, [32]]
+  - [[9], 1, Detect, [nc]]

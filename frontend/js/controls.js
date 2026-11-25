@@ -142,18 +142,18 @@
       });
 
       this.els.demoPickBtn.addEventListener("click", () => {
-        this.runDemoPickAndPlace("dental_tool");
+        this.requestVisionPick("dental_tool");
       });
 
       if (this.els.demoFlossBtn) {
         this.els.demoFlossBtn.addEventListener("click", () => {
-          this.runDemoPickAndPlace("floss_holder");
+          this.requestVisionPick("floss_holder");
         });
       }
 
       // Atalhos de teclado (ignora key-repeat automático para não enfileirar rajadas excessivas)
       window.addEventListener("keydown", (e) => {
-        if (document.activeElement === this.els.wsInput) return;
+        if (e.target?.closest("input, select, textarea, [contenteditable=true]")) return;
         const cmd = KEY_TO_COMMAND[e.code];
         if (!cmd) return;
         e.preventDefault();
@@ -180,6 +180,7 @@
     }
 
     dispatchCommand(command, duration = 0.14) {
+      if (this.visionRunning) return;
       this.ws.sendCommand(command, {
         speed: this.currentSpeed,
         force: this.currentForce,
@@ -261,49 +262,14 @@
       this.els.logBox.scrollTop = this.els.logBox.scrollHeight;
     }
 
-    async runDemoPickAndPlace(objectName = "dental_tool") {
-      if (this.macroRunning) return;
-      this.macroRunning = true;
-
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      this.ws.sendCommand("reset");
-      await sleep(340);
-
-      // Lê a posição física real da haste (`grasp_pos`) diretamente do snapshot do MuJoCo
-      const st0 = this.ws.lastKnownState || {};
-      const objs = Array.isArray(st0.objects) ? st0.objects : [];
-      const targetObj = objs.find((o) => o.name === objectName) || objs[0];
-      const gp = (targetObj && (targetObj.grasp_pos || targetObj.pos)) || [0.25, -0.22, 0.010];
-      const gx = Number(gp[0]);
-      const gy = Number(gp[1]);
-      const graspZ = Math.max(0.022, Number(gp[2]) + 0.014);
-      const graspForce = Math.max(45, this.currentForce);
-
-      this.appendLog(
-        `Capturando '${(targetObj && targetObj.label) || objectName}' em [${gx.toFixed(3)}, ${gy.toFixed(3)}] e entregando na zona verde...`,
-        "ok"
-      );
-
-      const steps = [
-        { cmd: "open", params: { speed: 0.65, force: 50 }, wait: 320 },
-        { cmd: "move_to", params: { target: { x: gx, y: gy, z: 0.20 }, speed: 0.65 }, wait: 1350 },
-        { cmd: "move_to", params: { target: { x: gx, y: gy, z: graspZ }, speed: 0.35 }, wait: 850 },
-        { cmd: "close", params: { speed: 0.50, force: graspForce }, wait: 650 },
-        { cmd: "move_to", params: { target: { x: gx, y: gy, z: 0.22 }, speed: 0.45 }, wait: 850 },
-        { cmd: "move_to", params: { target: { x: -0.30, y: 0.26, z: 0.22 }, speed: 0.58 }, wait: 1650 },
-        { cmd: "move_to", params: { target: { x: -0.30, y: 0.26, z: 0.042 }, speed: 0.36 }, wait: 850 },
-        { cmd: "open", params: { speed: 0.55, force: 35 }, wait: 520 },
-        { cmd: "move_to", params: { target: { x: -0.30, y: 0.26, z: 0.22 }, speed: 0.55 }, wait: 650 },
-      ];
-
-      for (const s of steps) {
-        if (!this.macroRunning) break;
-        this.ws.sendCommand(s.cmd, s.params || {});
-        await sleep(s.wait);
+    requestVisionPick(className) {
+      if (this.macroRunning || this.visionRunning) return;
+      this._stopHold();
+      if (this.ws.sendCommand("vision_pick", {class_name: className})) {
+        this.appendLog(`Comando enviado: pegar '${className}'. Solicitando detecção ao backend.`, "info");
       }
-      this.macroRunning = false;
-      this.appendLog("Pick & Place concluído na zona de entrega ao lado da cadeira.", "ok");
     }
+
   }
 
   global.SimulatorUIControls = SimulatorUIControls;
@@ -331,6 +297,7 @@
     if (!canvas) return;
 
     let uiControls = null;
+    let visionPanel = null;
     const sharedOpts = {
       onFpsUpdate: (fps) => {
         if (uiControls) uiControls.updateRenderFps(fps);
@@ -356,6 +323,7 @@
     }
 
     const wsClient = new GripperWebSocketClient({
+      onVisionPick: (packet) => { if (visionPanel) visionPanel.setOperation(packet); },
       onState: (state) => {
         renderer.ingestBackendState(state);
         if (uiControls) uiControls.updateTelemetryUI(state);
@@ -374,6 +342,7 @@
     });
 
     uiControls = new SimulatorUIControls(wsClient, renderer);
+    visionPanel = new VisionPanel(wsClient, uiControls);
     renderer.ingestBackendState(wsClient.lastKnownState);
     renderer.start();
     wsClient.connect();

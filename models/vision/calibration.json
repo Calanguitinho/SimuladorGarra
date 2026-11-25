@@ -1,0 +1,96 @@
+{
+  "id": "vision-c02d8debfc84",
+  "validated_for_pick": true,
+  "camera": {
+    "camera_id": "vision_top",
+    "image_size": [
+      640,
+      480
+    ],
+    "position": [
+      0.28,
+      -0.75,
+      0.6
+    ],
+    "rotation": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.7494732117818854,
+        -0.6620346704073322
+      ],
+      [
+        0.0,
+        0.6620346704073322,
+        0.7494732117818854
+      ]
+    ],
+    "intrinsics": [
+      579.4112549695428,
+      579.4112549695428,
+      319.5,
+      239.5
+    ]
+  },
+  "roi_world_m": [
+    0.15,
+    0.4,
+    -0.34,
+    -0.1
+  ],
+  "classes": {
+    "dental_tool": {
+      "bbox_point": [
+        0.4724287166197859,
+        0.4542139731237511
+      ],
+      "plane_z_m": 0.008997692918499185,
+      "tcp_z_m": 0.024,
+      "bbox_size_range_px": [
+        [
+          9.0,
+          71.39999999999999
+        ],
+        [
+          27.0,
+          214.20000000000002
+        ]
+      ]
+    },
+    "floss_holder": {
+      "bbox_point": [
+        0.43498920633793964,
+        0.5122370988886868
+      ],
+      "plane_z_m": 0.002997692918499175,
+      "tcp_z_m": 0.022,
+      "bbox_size_range_px": [
+        [
+          11.4,
+          28.5
+        ],
+        [
+          34.2,
+          85.5
+        ]
+      ]
+    }
+  },
+  "fit_dataset": "datasets/odontologia-v2",
+  "note": "Perfil experimental validado somente no simulador; ver VISION_VALIDATION.md.",
+  "validation_scope": {
+    "environment": "MuJoCo native simulator only",
+    "camera_id": "vision_top",
+    "calibration_id": "vision-c02d8debfc84",
+    "orientation": "initial orientation; narrow yaw dataset",
+    "position_jitter_m": 0.015,
+    "eligible_picks_completed": 6,
+    "requests_without_eligible_target": 1,
+    "evidence": "VISION_VALIDATION.md",
+    "experimental": true
+  }
+}

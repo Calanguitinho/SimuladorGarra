@@ -1,0 +1,4 @@
+-r requirements.txt
+# O PyTorch é instalado pelo Ultralytics; para GPU, seguir a distribuição oficial.
+ultralytics>=8.3,<9
+PyYAML>=6.0,<7

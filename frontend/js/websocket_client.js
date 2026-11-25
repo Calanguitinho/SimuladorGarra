@@ -18,6 +18,8 @@
       this.onConnectionChange = options.onConnectionChange || function () {};
       this.onLatencySample = options.onLatencySample || function () {};
       this.onLog = options.onLog || function () {};
+      this.onVision = options.onVision || function () {};
+      this.onVisionPick = options.onVisionPick || function () {};
 
       this.ws = null;
       this.isConnected = false;
@@ -151,6 +153,8 @@
         if (packet.type === "error") {
           this._log(`Erro do servidor: ${packet.error}`, "warn");
         }
+        if (packet.type === "vision") this.onVision(packet);
+        if (packet.type === "vision_pick_status") this.onVisionPick(packet);
 
         if (packet.type === "ack" && packet.req_id && this.pendingRequests.has(packet.req_id)) {
           const sentPerf = this.pendingRequests.get(packet.req_id);

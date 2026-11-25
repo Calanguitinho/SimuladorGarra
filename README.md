@@ -52,6 +52,17 @@ SimuladorGarra/
 
 ### 2.1 Instalar Dependências Python
 
+No **Windows (PowerShell)**, use o Python Launcher (`py`):
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Esses comandos usam o ambiente virtual diretamente, sem precisar ativá-lo. Se `python3` abrir a Microsoft Store ou informar que o Python não foi encontrado, use `py`: no Windows, `python3` pode apontar apenas para um atalho da Store. Para listar as versões instaladas, execute `py -0p`. O comando acima requer Python 3.11 instalado.
+
+No **Linux/macOS**:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -62,18 +73,26 @@ pip install -r requirements.txt
 
 ### 2.2 Posicionamento do Modelo `.mjcf`
 
-O modelo físico padrão reside em `backend/models/gripper.mjcf` e inclui:
+O motor nativo atual constrói a cena UR5e + Robotiq em `backend/clinic_model.py`. A câmera `vision_top` também é criada nesse construtor. O arquivo legado `backend/models/gripper.mjcf`, validado como XML na inicialização e usado como referência pelo fallback, descreve:
 - Juntas prismáticas limitadas (`joint_x`, `joint_y`, `joint_z`, `joint_finger_left`, `joint_finger_right`) com acoplamento simétrico `<equality>`.
 - Pastilhas de contato com atrito elíptico elevado (`condim="4"`, `impratio="10"`).
 - Sensores `<framepos>`, `<framequat>`, `<force>`, `<torque>` e sensores táteis `<touch>` em cada dedo.
 
-Para carregar um modelo `.mjcf` customizado, passe `--model /caminho/seu_modelo.mjcf` ao iniciar o backend.
+O parâmetro `--model` seleciona o XML validado, mas atualmente não substitui a cena UR5e nativa. Para alterar essa cena, modifique o construtor em `backend/clinic_model.py`.
 
 ---
 
 ## 3. Como Executar o Backend e o Frontend
 
 ### 3.1 Iniciar o Servidor (Backend + Frontend Integrado na Porta 8000)
+
+Windows (PowerShell):
+
+```powershell
+.\.venv\Scripts\python.exe main.py --port 8000
+```
+
+Linux/macOS:
 
 ```bash
 .venv/bin/python main.py --port 8000
@@ -106,7 +125,7 @@ O arquivo gerado em `frontend/dist/index.html` contém todo o HTML, CSS e JavaSc
   - `Espaço` ou `C`: `close` (fechar dedos com força controlada)
   - `O`: `open` (abrir dedos)
 - **Sliders**: Ajuste em tempo real de `speed` (`0.05` – `1.50 m/s`) e `force` (`1` – `100 N`).
-- **Auto Pick & Place**: Demonstração automática capturando o **instrumento dental** (STL NIH3D) e depositando-o na zona verde.
+- **Pegar Instrumento / Pegar Fio Dental**: enviam um comando ao backend, que solicita a visão, calcula o plano e executa a entrega. Exigem visão e captura habilitadas.
 - **Clínica 3D**: modelos em `assets/objetos/odontologia/` (cadeira, bandeja, kit, instrumento) via Three.js + `/api/scene-manifest`.
 
 ---
@@ -122,3 +141,45 @@ O arquivo gerado em `frontend/dist/index.html` contém todo o HTML, CSS e JavaSc
 ```
 
 Consulte [`PROTOCOL.md`](./PROTOCOL.md) para detalhes das mensagens JSON e [`DEPLOYMENT.md`](./DEPLOYMENT.md) para instruções de produção.
+
+## 6. Plano de Integração do YOLO
+
+O documento [`YOLO_INTEGRATION.md`](./YOLO_INTEGRATION.md) descreve a arquitetura, as alterações por arquivo e os critérios de validação. A implementação inclui câmera MuJoCo `vision_top`, worker de visão, preview com caixas, projeção para o mundo, captura cancelável e ferramentas de dataset/treino/avaliação. A qualidade dos pesos e da preensão precisa ser validada para cada versão.
+
+No Windows (PowerShell), instale o conjunto opcional e habilite o serviço de visão em espera:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-vision.txt
+.\.venv\Scripts\python.exe main.py --vision --port 8000
+```
+
+A câmera e o YOLO ficam em espera até um comando. Os botões “Pegar Instrumento”, “Pegar Fio Dental” e “Pegar ferramenta” solicitam uma nova detecção por classe ao backend; ele valida o alvo, calcula o plano e só então movimenta o braço. Há uma revalidação pontual antes da descida. Consultar status não produz imagens e o preview mantém apenas a última coleta. Sem pesos válidos ou sem alvo elegível, a operação falha sem iniciar movimento. O modo manual continua disponível. Para criar um detector odontológico:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/generate_vision_dataset.py --output datasets/odontologia-new --count 300
+.\.venv\Scripts\python.exe scripts/calibrate_vision.py --dataset datasets/odontologia-new --output models/vision/calibration-new.json
+.\.venv\Scripts\python.exe scripts/train_yolo.py --data datasets/odontologia-new/data.yaml --output models/vision/odontologia-new.pt --epochs 50 --device cpu
+.\.venv\Scripts\python.exe scripts/evaluate_vision.py --dataset datasets/odontologia-new --model models/vision/odontologia-new.pt --calibration models/vision/calibration-new.json
+```
+
+O gerador preserva datasets existentes: use `--output` com outro diretório se já houver dados; os outros scripts aceitam `--dataset` ou `--data` para apontar para essa versão. O treinamento padrão usa a arquitetura compacta local `models/vision/yolo_dental.yaml`, com `imgsz=320` e sem baixar pesos iniciais. Também aceita `--model yolo11n.yaml` ou um `.pt` local para transferência de aprendizado. Treinar do zero exige avaliar quantidade de dados e número de épocas. Use `--vision-imgsz` se os pesos tiverem sido treinados com outra resolução.
+
+Os pesos e a calibração entregues têm um perfil experimental validado no simulador, descrito em [`VISION_VALIDATION.md`](./VISION_VALIDATION.md). Para habilitar a captura pelo painel, execute com `--vision --vision-enable-pick`. Novos pesos/calibrações saem dos scripts com `validated_for_pick: false`; registre a validação após medir erro e preensão, conforme [`models/vision/README.md`](./models/vision/README.md). Sem manifesto, calibração e flag habilitados, a captura fica bloqueada. `--vision-device`, `--vision-fps`, `--vision-confidence`, `--vision-model`, `--vision-calibration` e `--vision-max-age-ms` ajustam a execução.
+
+Para ensaiar a preensão antes de aprovar novos artefatos, use `scripts/evaluate_vision_pick.py --class-name dental_tool` (ou `floss_holder`), acrescentando `--trials 3 --position-jitter 0.015` para variar posições. O script usa cópias temporárias no simulador, registra o resultado e preserva os manifestos originais. Um sucesso na pose inicial não substitui testes em posições variadas.
+
+Se aparecer “Observação expirada”, confira `age_ms`, `processing_ms`, `inference_ms` e `max_age_ms` em `/api/vision/status`. O limite padrão é 300 ms e inclui captura, inferência e entrega ao controlador. A CPU usa duas threads, aplicadas antes do carregamento e reaplicadas antes da inferência porque a inicialização do Ultralytics pode redefinir esse limite. Após atualizar o código, pare o backend com Ctrl+C, reinicie e recarregue a página:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --vision --vision-enable-pick --vision-threads 2 --port 8000
+```
+
+O primeiro comando carrega as dependências e aquece o modelo; aguarde sua conclusão antes de solicitar novamente. Se a carga da máquina ainda fizer os quadros excederem 300 ms, a bancada estática do simulador pode ser ensaiada com `--vision-max-age-ms 1000`. Esse ajuste permite observações mais antigas e exige nova avaliação se os objetos estiverem em movimento; ele não corrige ausência de ferramenta, oclusão ou calibração inválida.
+
+Verificações:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_vision.py scenarios/ -q
+.\.venv\Scripts\python.exe main.py --scenario vision
+.\.venv\Scripts\python.exe scripts/bundle_frontend.py
+```

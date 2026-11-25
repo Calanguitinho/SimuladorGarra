@@ -43,3 +43,17 @@ Thumbs.db
 
 # Optional local artifacts (keep tracked screenshots if desired — uncomment to ignore)
 # artifacts/
+
+# Visão: configurações e manifestos permanecem versionados.
+models/vision/*.pt
+datasets/odontologia/images/
+datasets/odontologia/labels/
+datasets/odontologia/samples.jsonl
+datasets/odontologia/manifest.json
+datasets/odontologia-*/images/
+datasets/odontologia-*/labels/
+datasets/odontologia-*/samples.jsonl
+datasets/odontologia-*/manifest.json
+runs/
+artifacts/vision_*/
+artifacts/vision_*.png

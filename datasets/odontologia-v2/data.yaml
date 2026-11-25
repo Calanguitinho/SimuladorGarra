@@ -1,0 +1,7 @@
+path: datasets/odontologia-v2
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: dental_tool
+  1: floss_holder
