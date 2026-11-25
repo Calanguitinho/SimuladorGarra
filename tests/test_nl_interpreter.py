@@ -75,6 +75,18 @@ def test_json_invalido_usa_fallback(monkeypatch):
     assert result["source"] == "keyword"
 
 
+def test_estrutura_gemini_invalida_usa_fallback(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "chave")
+    monkeypatch.setattr(
+        nl_interpreter.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse({"candidates": [{"content": None}]}),
+    )
+    result = nl_interpreter.interpret("Me passe o instrumento dental", CLASSES)
+    assert result["class_name"] == "dental_tool"
+    assert result["source"] == "keyword"
+
+
 def test_classe_inexistente_no_gemini_pede_esclarecimento(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "chave")
     monkeypatch.setattr(

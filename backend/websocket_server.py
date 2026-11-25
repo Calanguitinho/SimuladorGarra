@@ -558,7 +558,10 @@ class GripperWebSocketServer:
             await self._send_json_http(writer, 400, {"error": "Content-Length inválido."})
             return
         if path == "/api/instruction" and content_length > 8192:
-            await self._send_json_http(writer, 413, {"error": "Corpo da instrução muito grande."})
+            _status_code, result = await self._handle_instruction(
+                None, input_error="Corpo da instrução muito grande."
+            )
+            await self._send_json_http(writer, 413, result)
             return
         body = (
             await reader.readexactly(content_length)
@@ -738,7 +741,9 @@ class GripperWebSocketServer:
             self.vision_pick.task.add_done_callback(log_when_complete)
         else:
             record["result"] = {
-                "stage": "clarification" if task["needs_clarification"] else "rejected",
+                "stage": "rejected" if error else (
+                    "clarification" if task["needs_clarification"] else "rejected"
+                ),
                 "error": error,
             }
             record["duration_ms"] = round(duration_ms, 2)

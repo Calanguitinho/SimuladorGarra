@@ -261,6 +261,7 @@ def interpret(
         ValueError,
         KeyError,
         TypeError,
+        AttributeError,
     ):
         return _fallback(text, classes)
 

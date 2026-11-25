@@ -140,9 +140,13 @@ class VisionPick:
                 ValueError(message or "Alvo não detectado em uma observação válida."),
                 "Detecção do alvo falhou",
             )
-        choices = [d for d in packet.get("detections", [])
-                   if d.get("class_name") == class_name
-                   and d.get("grasp_candidate", {}).get("valid")]
+        detections = packet.get("detections", [])
+        if not isinstance(detections, list):
+            raise RecoverablePickFailure("Observação do alvo inválida ou instável.")
+        choices = [d for d in detections if isinstance(d, dict)
+                   and d.get("class_name") == class_name
+                   and isinstance(d.get("grasp_candidate"), dict)
+                   and d["grasp_candidate"].get("valid")]
         if len(choices) != 1:
             raise RecoverablePickFailure("Alvo não encontrado com segurança ou seleção instável.")
         try:
@@ -185,9 +189,15 @@ class VisionPick:
             )
         if packet.get("scene_revision") != revision:
             raise ValueError("Cena alterada durante a revalidação do alvo.")
-        choices = [d for d in packet.get("detections", [])
-                   if d.get("class_name") == class_name
-                   and d.get("grasp_candidate", {}).get("valid")
+        detections = packet.get("detections", [])
+        if not isinstance(detections, list):
+            raise RecoverablePickFailure("Alvo não pôde ser revalidado em uma observação válida.")
+        choices = [d for d in detections if isinstance(d, dict)
+                   and d.get("class_name") == class_name
+                   and isinstance(d.get("grasp_candidate"), dict)
+                   and d["grasp_candidate"].get("valid")
+                   and isinstance(d["grasp_candidate"].get("position_world_m"), (list, tuple))
+                   and len(d["grasp_candidate"]["position_world_m"]) == 3
                    and math.dist(d["grasp_candidate"]["position_world_m"], point) < 0.008]
         if len(choices) != 1:
             raise RecoverablePickFailure("Alvo não pôde ser revalidado antes da descida.")

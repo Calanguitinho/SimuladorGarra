@@ -181,6 +181,27 @@ def test_http_rejeita_texto_vazio_ou_maior_que_limite(tmp_path, monkeypatch, tex
     asyncio.run(check())
 
 
+def test_http_limita_tamanho_do_corpo_e_registra_recusa(tmp_path, monkeypatch):
+    async def check():
+        server = make_server(tmp_path)
+        monkeypatch.setattr(websocket_server, "interpret", lambda *_args: {
+            "intent": "unknown", "class_name": None, "confidence": 0.0,
+            "needs_clarification": True, "clarification": "Envie uma instrução menor.", "source": "keyword",
+        })
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        writer = CaptureWriter()
+        await server._handle_http(reader, writer, "POST", "/api/instruction", {
+            "content-length": "8193",
+        })
+        status, body = parsed_response(writer)
+        assert status == 413 and body["accepted"] is False
+        record = json.loads(server.nl_log_path.read_text(encoding="utf-8"))
+        assert record["result"]["stage"] == "rejected"
+
+    asyncio.run(check())
+
+
 def test_websocket_aceita_mensagem_instruction(tmp_path, monkeypatch):
     async def check():
         server = make_server(tmp_path)
