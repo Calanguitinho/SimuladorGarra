@@ -57,10 +57,10 @@ class GripperConfig:
 class ServerConfig:
     """Parâmetros de rede HTTP/WebSocket para desenvolvimento e produção."""
 
-    host: str = field(default_factory=lambda: os.getenv("SIM_HOST", "0.0.0.0"))
+    host: str = field(default_factory=lambda: os.getenv("SIM_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(os.getenv("SIM_PORT", "8000")))
     ws_path: str = "/ws"
-    cors_origins: str = field(default_factory=lambda: os.getenv("SIM_CORS_ORIGIN", "*"))
+    cors_origins: str = field(default_factory=lambda: os.getenv("SIM_CORS_ORIGIN", "same-origin"))
     client_timeout_s: float = 30.0
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
 

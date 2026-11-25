@@ -103,6 +103,8 @@ Abra no navegador:
 - **Versão Single-File Estática**: [http://localhost:8000/standalone](http://localhost:8000/standalone)
 - **Healthcheck REST**: [http://localhost:8000/health](http://localhost:8000/health)
 
+O backend escuta apenas `127.0.0.1` por padrão. Para acesso de outra máquina, configure `SIM_HOST` e um `SIM_CORS_ORIGIN` específico para a interface confiável. `SIM_CORS_ORIGIN=*` permite origens de navegador de qualquer domínio; use essa opção somente em uma rede controlada. O servidor não autentica clientes, portanto não o exponha diretamente à internet.
+
 ### 3.2 Gerar o Frontend Single-File para Hospedagem Estática Independente
 
 ```bash
@@ -226,7 +228,7 @@ curl.exe -i -X POST http://localhost:8000/api/instruction `
   -d '{"text":"Pegue o instrumento dental e o fio dental"}'
 ```
 
-Respostas aceitas iniciam o mesmo `vision_pick` dos botões do painel. O servidor retorna a tarefa, confiança, fonte (`gemini` ou `keyword`), status atual e erro opcional. `409` indica outra captura em andamento e `503` indica visão/captura desabilitada. O WebSocket também aceita `{"type":"instruction","text":"..."}`; consulte [`PROTOCOL.md`](./PROTOCOL.md) para os schemas. Tentativas e resultados finais são acrescentados a `artifacts/nl_log.jsonl`.
+Respostas aceitas iniciam o mesmo `vision_pick` dos botões do painel. O servidor retorna a tarefa, confiança, fonte (`gemini` ou `keyword`), status atual e erro opcional. `409` indica outra captura em andamento, `429` limita solicitações concorrentes ou muito próximas, `403` indica origem de navegador não permitida e `503` indica visão/captura desabilitada. O endpoint aceita no máximo 300 caracteres e 8 KiB de corpo; demais corpos HTTP são limitados a 1 MiB e mensagens WebSocket a 16 KiB. O WebSocket também aceita `{"type":"instruction","text":"..."}`; consulte [`PROTOCOL.md`](./PROTOCOL.md) para os schemas. Tentativas e resultados finais são acrescentados a `artifacts/nl_log.jsonl` com segredos comuns mascarados.
 
 Falhas de detecção, revalidação ou preensão podem repetir até `--vision-pick-max-attempts`; entre tentativas, o robô abre a garra, retorna à pose segura e faz uma nova detecção. O status informa `attempt`, `max_attempts`, `last_failure` e `recovered`. Cancelamento e erros de simulação não iniciam outra tentativa.
 
@@ -237,4 +239,4 @@ Execute os testes offline e a avaliação de palavras-chave:
 .\.venv\Scripts\python.exe scripts/evaluate_nl.py --mode keyword
 ```
 
-O avaliador lê as 40 frases de `datasets/nl_commands.json` e grava as métricas em `artifacts/nl_eval_<timestamp>.json`. Para avaliar o Gemini, defina `GEMINI_API_KEY` e use `--mode gemini`. Para incluir capturas simuladas de ponta a ponta, passe `--e2e N`, por exemplo `--mode keyword --e2e 2`; esse ensaio exige detector, pesos e calibração validados.
+O avaliador lê as 56 frases de `datasets/nl_commands.json`, separa 30 de desenvolvimento e 26 de teste, e grava métricas por split em `artifacts/nl_eval_<timestamp>.json`. Todas as linhas estão marcadas para revisão humana; os resultados atuais são exploratórios e não demonstram qualidade independente. Para avaliar o Gemini, defina `GEMINI_API_KEY` e use `--mode gemini`. Para incluir capturas simuladas de ponta a ponta, passe `--e2e N`, por exemplo `--mode keyword --e2e 2`; esse ensaio exige detector, pesos e calibração validados.

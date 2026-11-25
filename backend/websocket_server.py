@@ -15,6 +15,8 @@ import hashlib
 import json
 import logging
 import mimetypes
+import os
+import re
 import socket
 import struct
 import time
@@ -25,12 +27,54 @@ from urllib.parse import unquote, urlparse, parse_qs
 
 from backend.config import BackendConfig, configure_backend_logger, load_backend_config
 from backend.gripper_controller import GripperController, InvalidCommandError
-from backend.nl_interpreter import MAX_TEXT_LENGTH, interpret
+from backend.nl_interpreter import MAX_TEXT_LENGTH, interpret, interpret_keywords
 from backend.mujoco_env import MuJoCoGripperEnv
 from backend.vision_service import VisionService
 from backend.vision_pick import VisionPick
 
 WS_MAGIC_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+MAX_HTTP_BODY_SIZE = 1_048_576
+MAX_INSTRUCTION_BODY_SIZE = 8192
+MAX_WS_MESSAGE_SIZE = 16_384
+NL_MIN_REQUEST_INTERVAL = 1.0
+
+
+class WebSocketProtocolError(ValueError):
+    def __init__(self, message: str, close_code: int = 1002) -> None:
+        super().__init__(message)
+        self.close_code = close_code
+
+
+def _redact_instruction(text: Any) -> str | None:
+    if not isinstance(text, str):
+        return None
+    safe_text = text[:MAX_TEXT_LENGTH]
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if api_key:
+        safe_text = safe_text.replace(api_key, "[REDACTED]")
+    safe_text = re.sub(r"\bAIza[0-9A-Za-z_-]{20,}\b", "[REDACTED]", safe_text)
+    safe_text = re.sub(r"(?i)\bbearer\s+\S+", "Bearer [REDACTED]", safe_text)
+    safe_text = re.sub(
+        r"(?i)(\b(?:api[_ -]?key|token|secret|password|passwd|credential|senha|chave)\s*[:=]\s*)[^\s,;]+",
+        r"\1[REDACTED]", safe_text,
+    )
+    return safe_text
+
+
+def _origin_allowed(origin: str | None, host: str, configured_origins: str) -> bool:
+    if not origin:
+        return True
+    if origin == "null":
+        return False
+    allowed = [item.strip() for item in configured_origins.split(",") if item.strip()]
+    if "*" in allowed or origin in allowed:
+        return True
+    parsed = urlparse(origin)
+    return (
+        parsed.scheme in ("http", "https")
+        and not parsed.username and not parsed.password
+        and bool(parsed.netloc) and parsed.netloc.casefold() == host.casefold()
+    )
 
 MIME_OVERRIDES = {
     ".html": "text/html; charset=utf-8",
@@ -92,6 +136,11 @@ async def read_ws_frame(reader: asyncio.StreamReader) -> Tuple[int, bytes]:
         elif length == 127:
             ext = await reader.readexactly(8)
             length = struct.unpack("!Q", ext)[0]
+
+        if opcode >= 0x8 and (not fin or length > 125):
+            raise WebSocketProtocolError("Invalid WebSocket control frame.")
+        if length > MAX_WS_MESSAGE_SIZE or len(fragments) + length > MAX_WS_MESSAGE_SIZE:
+            raise WebSocketProtocolError("WebSocket message exceeds the size limit.", close_code=1009)
 
         mask_key = await reader.readexactly(4) if masked else b""
         data = await reader.readexactly(length) if length > 0 else b""
@@ -199,6 +248,8 @@ class GripperWebSocketServer:
         self._last_vision_key = None
         self._last_pick_status = None
         self.nl_log_path = Path(__file__).resolve().parent.parent / "artifacts" / "nl_log.jsonl"
+        self._nl_inflight = False
+        self._nl_last_request_at = 0.0
 
     # ------------------------------------------------------------------------
     # Ciclo de Vida do Servidor
@@ -370,7 +421,17 @@ class GripperWebSocketServer:
         for line in lines[1:]:
             if ":" in line:
                 k, v = line.split(":", 1)
-                headers[k.strip().lower()] = v.strip()
+                key = k.strip().lower()
+                if key in headers and key in ("content-length", "transfer-encoding"):
+                    await self._send_json_http(writer, 400, {"error": "Cabeçalho HTTP repetido."})
+                    return
+                headers[key] = v.strip()
+
+        if headers.get("origin") and not _origin_allowed(
+            headers["origin"], headers.get("host", ""), self.config.server.cors_origins
+        ):
+            await self._send_http_response(writer, 403, "text/plain; charset=utf-8", b"Origin not allowed")
+            return
 
         if headers.get("upgrade", "").lower() == "websocket":
             await self._handle_websocket(reader, writer, headers, peer)
@@ -451,6 +512,8 @@ class GripperWebSocketServer:
 
                 await self._process_ws_message(session, raw_payload)
 
+        except WebSocketProtocolError as exc:
+            await session.send_control(0x8, struct.pack("!H", exc.close_code))
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
             pass
         finally:
@@ -492,7 +555,7 @@ class GripperWebSocketServer:
 
             await session.send_json(response)
 
-        except (json.JSONDecodeError, InvalidCommandError, ValueError) as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError, InvalidCommandError, ValueError) as exc:
             self.logger.warning("Comando inválido de %s: %s", session.peer, exc)
             await session.send_json(
                 {
@@ -549,25 +612,46 @@ class GripperWebSocketServer:
         parsed = urlparse(raw_target)
         path = unquote(parsed.path)
 
+        if headers.get("origin") and not _origin_allowed(
+            headers["origin"], headers.get("host", ""), self.config.server.cors_origins
+        ):
+            await self._send_json_http(writer, 403, {"error": "Origem não permitida."})
+            return
+        if "transfer-encoding" in headers:
+            await self._send_json_http(writer, 400, {"error": "Transfer-Encoding não suportado."})
+            return
+
+        raw_content_length = headers.get("content-length", "0")
+        if not raw_content_length.isdecimal():
+            await self._send_json_http(writer, 400, {"error": "Content-Length inválido."})
+            return
         try:
-            content_length = int(headers.get("content-length", "0") or "0")
+            content_length = int(raw_content_length)
         except ValueError:
             await self._send_json_http(writer, 400, {"error": "Content-Length inválido."})
             return
         if content_length < 0:
             await self._send_json_http(writer, 400, {"error": "Content-Length inválido."})
             return
-        if path == "/api/instruction" and content_length > 8192:
-            _status_code, result = await self._handle_instruction(
-                None, input_error="Corpo da instrução muito grande."
-            )
-            await self._send_json_http(writer, 413, result)
+        body_limit = MAX_INSTRUCTION_BODY_SIZE if path == "/api/instruction" else MAX_HTTP_BODY_SIZE
+        if content_length > body_limit:
+            if path == "/api/instruction":
+                _status_code, result = await self._handle_instruction(
+                    None, input_error="Corpo da requisição muito grande."
+                )
+                await self._send_json_http(writer, 413, result)
+            else:
+                await self._send_json_http(writer, 413, {"error": "Corpo da requisição muito grande."})
             return
-        body = (
-            await reader.readexactly(content_length)
-            if content_length > 0
-            else b""
-        )
+        try:
+            body = (await asyncio.wait_for(reader.readexactly(content_length), timeout=10.0)
+                    if content_length > 0 else b"")
+        except asyncio.IncompleteReadError:
+            await self._send_json_http(writer, 400, {"error": "Corpo da requisição incompleto."})
+            return
+        except asyncio.TimeoutError:
+            await self._send_json_http(writer, 408, {"error": "Tempo esgotado ao receber o corpo."})
+            return
 
         if method == "OPTIONS":
             await self._send_http_response(writer, 204, "text/plain", b"")
@@ -664,11 +748,10 @@ class GripperWebSocketServer:
         """Interpreta uma instrução e inicia a captura pelo caminho já existente."""
         started = time.perf_counter()
         allowed_classes = tuple(self.vision.config.allowed_classes)
-        task = await asyncio.to_thread(interpret, text, allowed_classes)
         error = input_error
         status_code = 400 if input_error else 200
         accepted = False
-        safe_text = text[:MAX_TEXT_LENGTH] if isinstance(text, str) else None
+        safe_text = _redact_instruction(text)
 
         if error is None and (not isinstance(text, str) or not text.strip()):
             error = "Informe uma instrução de texto não vazia."
@@ -676,28 +759,50 @@ class GripperWebSocketServer:
         elif error is None and len(text) > MAX_TEXT_LENGTH:
             error = f"A instrução deve ter no máximo {MAX_TEXT_LENGTH} caracteres."
             status_code = 400
-        elif error is None and task["intent"] == "fetch" and not task["needs_clarification"]:
-            if not self.vision.config.enabled or not self.vision.config.enable_pick:
+        if error is not None or not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT_LENGTH:
+            task = interpret_keywords(text, allowed_classes)
+        elif self._nl_inflight:
+            task = interpret_keywords(text, allowed_classes)
+            error = "Outra instrução está sendo interpretada; tente novamente em instantes."
+            status_code = 429
+        elif time.monotonic() - self._nl_last_request_at < NL_MIN_REQUEST_INTERVAL:
+            task = interpret_keywords(text, allowed_classes)
+            error = "Aguarde um segundo antes de enviar outra instrução."
+            status_code = 429
+        else:
+            self._nl_last_request_at = time.monotonic()
+            if self.vision_pick.active:
+                task = interpret_keywords(text, allowed_classes)
+                error = "Já existe uma operação de captura em andamento."
+                status_code = 409
+            elif not self.vision.config.enabled or not self.vision.config.enable_pick:
+                task = interpret_keywords(text, allowed_classes)
                 error = "A visão ou a captura de ferramentas está desabilitada."
                 status_code = 503
-            elif self.vision_pick.active:
+            else:
+                self._nl_inflight = True
+                try:
+                    task = await asyncio.to_thread(interpret, text, allowed_classes)
+                except Exception:
+                    self.logger.warning("Falha inesperada na interpretação natural; usando fallback local.")
+                    task = interpret_keywords(text, allowed_classes)
+                finally:
+                    self._nl_inflight = False
+
+        if isinstance(task.get("clarification"), str):
+            task["clarification"] = _redact_instruction(task["clarification"])
+
+        if error is None and task["intent"] == "fetch" and not task["needs_clarification"]:
+            if self.vision_pick.active:
                 error = "Já existe uma operação de captura em andamento."
                 status_code = 409
             else:
                 try:
-                    self.execute_command({
-                        "command": "vision_pick",
-                        "class_name": task["class_name"],
-                    })
+                    self.execute_command({"command": "vision_pick", "class_name": task["class_name"]})
                     accepted = True
                 except ValueError as exc:
                     error = str(exc)
-                    if self.vision_pick.active or "em andamento" in error.casefold():
-                        status_code = 409
-                    elif not self.vision.config.enabled or not self.vision.config.enable_pick:
-                        status_code = 503
-                    else:
-                        status_code = 400
+                    status_code = 409 if self.vision_pick.active or "em andamento" in error.casefold() else 400
                 except Exception:
                     error = "Não foi possível iniciar a operação de captura."
                     status_code = 500
@@ -865,7 +970,7 @@ class GripperWebSocketServer:
         if request_path.startswith("/assets/"):
             rel = request_path[len("/assets/") :]
             target_file = (assets_root / rel).resolve()
-            if not str(target_file).startswith(str(assets_root)) or not target_file.is_file():
+            if not target_file.is_relative_to(assets_root) or not target_file.is_file():
                 await self._send_json_http(
                     writer, 404, {"error": f"Asset não encontrado: {request_path}"}
                 )
@@ -888,7 +993,7 @@ class GripperWebSocketServer:
             rel = request_path.lstrip("/")
             target_file = (frontend_root / rel).resolve()
 
-        if not str(target_file).startswith(str(frontend_root)) or not target_file.is_file():
+        if not target_file.is_relative_to(frontend_root) or not target_file.is_file():
             await self._send_json_http(
                 writer, 404, {"error": f"Recurso não encontrado: {request_path}"}
             )
@@ -922,6 +1027,9 @@ class GripperWebSocketServer:
             200: "OK",
             204: "No Content",
             400: "Bad Request",
+            403: "Forbidden",
+            408: "Request Timeout",
+            429: "Too Many Requests",
             409: "Conflict",
             404: "Not Found",
             413: "Payload Too Large",
@@ -930,11 +1038,14 @@ class GripperWebSocketServer:
             500: "Internal Server Error",
         }
         reason = reasons.get(status_code, "OK")
+        cors_header = ""
+        if self.config.server.cors_origins != "same-origin":
+            cors_header = f"Access-Control-Allow-Origin: {self.config.server.cors_origins}\r\n"
         head = (
             f"HTTP/1.1 {status_code} {reason}\r\n"
             f"Content-Type: {content_type}\r\n"
             f"Content-Length: {len(body)}\r\n"
-            f"Access-Control-Allow-Origin: {self.config.server.cors_origins}\r\n"
+            f"{cors_header}"
             "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
             "Access-Control-Allow-Headers: Content-Type\r\n"
             "Cache-Control: no-store\r\n"
@@ -1076,12 +1187,37 @@ class AsyncWSClient:
 
     async def close(self) -> None:
         if self._writer is not None:
+            writer = self._writer
             try:
-                self._writer.write(encode_ws_frame(b"", opcode=0x8, mask=True))
-                await self._writer.drain()
-                self._writer.close()
-                await self._writer.wait_closed()
+                writer.write(encode_ws_frame(b"", opcode=0x8, mask=True))
+                await writer.drain()
+                deadline = asyncio.get_running_loop().time() + 1.0
+                while self._reader is not None:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        opcode, payload = await asyncio.wait_for(
+                            read_ws_frame(self._reader), timeout=remaining
+                        )
+                    except asyncio.TimeoutError:
+                        break
+                    except asyncio.IncompleteReadError:
+                        break
+                    if opcode == 0x8:
+                        break
+                    if opcode == 0x9:
+                        writer.write(encode_ws_frame(payload, opcode=0xA, mask=True))
+                        await writer.drain()
             except (ConnectionError, OSError, RuntimeError):
                 pass
-            self._writer = None
-            self._reader = None
+            finally:
+                writer.close()
+                try:
+                    await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    writer.transport.abort()
+                except (ConnectionError, OSError, RuntimeError):
+                    pass
+                self._writer = None
+                self._reader = None

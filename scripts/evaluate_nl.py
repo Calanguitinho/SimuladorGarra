@@ -40,36 +40,18 @@ def _interpret(text: str, allowed_classes: tuple[str, ...], mode: str) -> dict[s
 
 def evaluate_dataset(samples: list[dict[str, Any]], mode: str,
                      allowed_classes: tuple[str, ...]) -> dict[str, Any]:
-    category_totals: dict[str, dict[str, int]] = {}
-    latencies: list[float] = []
     rows = []
-    correct_count = 0
-    clarify_true_positive = clarify_false_positive = clarify_false_negative = 0
 
     for sample in samples:
         started = time.perf_counter()
         prediction = _interpret(sample["text"], allowed_classes, mode)
         latency_ms = (time.perf_counter() - started) * 1000.0
-        latencies.append(latency_ms)
         predicted_class = prediction["class_name"]
         predicted_clarification = prediction["needs_clarification"]
         expected_class = sample["expected_class"]
         expected_clarification = sample["expected_clarification"]
         correct = (predicted_class == expected_class
                    and predicted_clarification == expected_clarification)
-        correct_count += int(correct)
-
-        if expected_clarification and predicted_clarification:
-            clarify_true_positive += 1
-        elif not expected_clarification and predicted_clarification:
-            clarify_false_positive += 1
-        elif expected_clarification and not predicted_clarification:
-            clarify_false_negative += 1
-
-        category = sample["category"]
-        totals = category_totals.setdefault(category, {"total": 0, "correct": 0})
-        totals["total"] += 1
-        totals["correct"] += int(correct)
         rows.append({
             "text": sample["text"],
             "expected_class": expected_class,
@@ -79,34 +61,54 @@ def evaluate_dataset(samples: list[dict[str, Any]], mode: str,
             "correct": correct,
             "confidence": prediction["confidence"],
             "source": prediction["source"],
-            "category": category,
+            "category": sample["category"],
+            "split": sample["split"],
             "revisar": bool(sample.get("revisar", False)),
             "latency_ms": round(latency_ms, 3),
         })
 
-    count = len(samples)
-    return {
-        "sample_count": count,
-        "accuracy": round(correct_count / max(1, count), 4),
-        "correct_count": correct_count,
-        "per_category": {
-            name: {
-                "total": values["total"],
-                "correct": values["correct"],
-                "accuracy": round(values["correct"] / max(1, values["total"]), 4),
-            }
-            for name, values in sorted(category_totals.items())
-        },
-        "clarification_precision": round(
-            clarify_true_positive / max(1, clarify_true_positive + clarify_false_positive), 4
-        ),
-        "clarification_recall": round(
-            clarify_true_positive / max(1, clarify_true_positive + clarify_false_negative), 4
-        ),
-        "latency_ms_p50": _percentile(latencies, 0.50),
-        "latency_ms_p95": _percentile(latencies, 0.95),
-        "predictions": rows,
+    def summarize(group: list[dict[str, Any]]) -> dict[str, Any]:
+        category_totals: dict[str, dict[str, int]] = {}
+        tp = fp = fn = correct_count = 0
+        for row in group:
+            correct_count += int(row["correct"])
+            if row["expected_clarification"] and row["predicted_clarification"]:
+                tp += 1
+            elif not row["expected_clarification"] and row["predicted_clarification"]:
+                fp += 1
+            elif row["expected_clarification"] and not row["predicted_clarification"]:
+                fn += 1
+            totals = category_totals.setdefault(row["category"], {"total": 0, "correct": 0})
+            totals["total"] += 1
+            totals["correct"] += int(row["correct"])
+        latencies = [row["latency_ms"] for row in group]
+        count = len(group)
+        return {
+            "sample_count": count,
+            "accuracy": round(correct_count / max(1, count), 4),
+            "correct_count": correct_count,
+            "review_required_count": sum(bool(row["revisar"]) for row in group),
+            "per_category": {
+                name: {
+                    "total": values["total"],
+                    "correct": values["correct"],
+                    "accuracy": round(values["correct"] / max(1, values["total"]), 4),
+                }
+                for name, values in sorted(category_totals.items())
+            },
+            "clarification_precision": round(tp / max(1, tp + fp), 4),
+            "clarification_recall": round(tp / max(1, tp + fn), 4),
+            "latency_ms_p50": _percentile(latencies, 0.50),
+            "latency_ms_p95": _percentile(latencies, 0.95),
+        }
+
+    metrics = summarize(rows)
+    metrics["per_split"] = {
+        split: summarize([row for row in rows if row["split"] == split])
+        for split in ("dev", "test")
     }
+    metrics["predictions"] = rows
+    return metrics
 
 
 async def evaluate_e2e(samples: list[dict[str, Any]], mode: str,
@@ -184,12 +186,23 @@ async def evaluate_e2e(samples: list[dict[str, Any]], mode: str,
 def _validate_samples(samples: Any) -> list[dict[str, Any]]:
     if not isinstance(samples, list):
         raise ValueError("O dataset deve ser uma lista JSON.")
-    required = {"text", "expected_class", "expected_clarification", "category"}
+    required = {"text", "expected_class", "expected_clarification", "category", "split"}
     for index, sample in enumerate(samples):
         if not isinstance(sample, dict) or not required.issubset(sample):
             raise ValueError(f"A amostra {index + 1} não contém os campos obrigatórios.")
         if not isinstance(sample["text"], str) or not isinstance(sample["expected_clarification"], bool):
             raise ValueError(f"Tipos inválidos na amostra {index + 1}.")
+        expected_class = sample["expected_class"]
+        if expected_class is not None and not isinstance(expected_class, str):
+            raise ValueError(f"Classe esperada inválida na amostra {index + 1}.")
+        if sample["expected_clarification"] != (expected_class is None):
+            raise ValueError(f"Classe e esclarecimento inconsistentes na amostra {index + 1}.")
+        if not isinstance(sample["category"], str):
+            raise ValueError(f"Categoria inválida na amostra {index + 1}.")
+        if "revisar" in sample and not isinstance(sample["revisar"], bool):
+            raise ValueError(f"Marcador revisar inválido na amostra {index + 1}.")
+        if sample["split"] not in ("dev", "test"):
+            raise ValueError(f"Split inválido na amostra {index + 1}; use dev ou test.")
     return samples
 
 
@@ -227,9 +240,14 @@ def print_report(report: dict[str, Any]) -> None:
     metrics = report["metrics"]
     print(f"Avaliação NL ({report['mode']}) — {metrics['sample_count']} frases")
     print(f"Acurácia geral: {metrics['accuracy']:.1%} ({metrics['correct_count']}/{metrics['sample_count']})")
+    print(f"Amostras marcadas para revisão manual: {metrics['review_required_count']}")
     print(f"Precisão de esclarecimento: {metrics['clarification_precision']:.1%}")
     print(f"Recall de esclarecimento: {metrics['clarification_recall']:.1%}")
     print(f"Latência p50/p95: {metrics['latency_ms_p50']} / {metrics['latency_ms_p95']} ms")
+    print("\nSplit  Acertos  Total  Acurácia  Recall esclarecer")
+    for split, values in metrics["per_split"].items():
+        print(f"{split:<6} {values['correct_count']:>7}  {values['sample_count']:>5}  "
+              f"{values['accuracy']:>8.1%}  {values['clarification_recall']:>17.1%}")
     print("\nCategoria          Acertos  Total  Acurácia")
     print("-----------------  -------  -----  --------")
     for category, values in metrics["per_category"].items():

@@ -39,7 +39,9 @@ A resposta mantém a interpretação, a aceitação, o status atual de `vision_p
 {"task":{"intent":"fetch","class_name":"dental_tool","confidence":0.82,"needs_clarification":false,"clarification":null,"source":"keyword"},"accepted":true,"status":{"type":"vision_pick_status","stage":"detecting"},"error":null}
 ```
 
-Um pedido ambíguo retorna HTTP 200 com `accepted:false` e a pergunta em `task.clarification`; a entrada inválida retorna 400, a captura ocupada retorna 409 e visão/captura desabilitada retorna 503. Nenhuma tarefa com esclarecimento movimenta o braço. O servidor registra tentativa, interpretação, resultado final e duração em `artifacts/nl_log.jsonl`.
+Um pedido ambíguo retorna HTTP 200 com `accepted:false` e a pergunta em `task.clarification`; a entrada inválida retorna 400, corpo acima do limite retorna 413, origem de navegador não permitida retorna 403, captura ocupada retorna 409, solicitação concorrente ou enviada em menos de um segundo retorna 429 e visão/captura desabilitada retorna 503. Nenhuma tarefa com esclarecimento movimenta o braço. O endpoint aceita até 300 caracteres e 8 KiB de corpo; outros corpos HTTP têm limite de 1 MiB e mensagens WebSocket de 16 KiB. O servidor registra tentativa, interpretação, resultado final e duração em `artifacts/nl_log.jsonl` com segredos mascarados.
+
+O servidor escuta em `127.0.0.1` e aceita apenas a mesma origem de navegador por padrão. Configure `SIM_HOST` e um `SIM_CORS_ORIGIN` específico para acesso remoto; `SIM_CORS_ORIGIN=*` permite todas as origens de navegador. A API não tem autenticação e não deve ser exposta diretamente à internet.
 
 O WebSocket aceita o formato equivalente `{"type":"instruction","text":"..."}` e responde com `type:"instruction_result"`, os mesmos campos da resposta HTTP e `http_status` com o status correspondente.
 
@@ -176,7 +178,7 @@ Caso um comando inválido seja enviado, a conexão **não é encerrada**; o serv
 
 ## 4. Endpoints HTTP REST Auxiliares
 
-Na mesma porta TCP (`8000` por padrão), o servidor expõe endpoints REST compatíveis com CORS:
+Na mesma porta TCP (`8000` por padrão), o servidor expõe endpoints REST com verificação de origem same-origin por padrão:
 
 - `GET /health` — Status operacional, motor físico ativo, FPS medido, clientes conectados e uptime.
 - `GET /api/state` — Snapshot imediato `{"state": ...}` via HTTP.

@@ -26,8 +26,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--host",
         type=str,
-        default="0.0.0.0",
-        help="Endereço IP de escuta do servidor (padrão: 0.0.0.0).",
+        default=None,
+        help="IP de escuta (padrao 127.0.0.1; pode ser definido em SIM_HOST).",
     )
     parser.add_argument(
         "--port",
