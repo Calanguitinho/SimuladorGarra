@@ -599,6 +599,21 @@ input[type="range"] {
     border-top: 1px solid var(--border-subtle);
   }
 }
+/* A imagem e o overlay compartilham o mesmo canvas e a mesma escala. */
+.vision-card { min-width: 0; }
+.vision-canvas { display: block; width: 100%; height: auto; background: #111827; border-radius: 8px; }
+.vision-status, .vision-operation { font-size: 12px; overflow-wrap: anywhere; }
+.vision-status {
+  height: 4.5em;
+  flex-shrink: 0;
+  line-height: 1.5;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.vision-target { display: block; width: 100%; margin: 8px 0; padding: 8px; color: var(--text-primary); background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 6px; }
+.vision-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.vision-actions button { padding: 8px; cursor: pointer; color: var(--text-primary); background: var(--accent-blue); border: 1px solid var(--border-subtle); border-radius: 6px; }
+.vision-actions button:disabled { opacity: .5; cursor: default; }
 
 </style>
   <script type="importmap">
@@ -784,6 +799,8 @@ input[type="range"] {
       this.onConnectionChange = options.onConnectionChange || function () {};
       this.onLatencySample = options.onLatencySample || function () {};
       this.onLog = options.onLog || function () {};
+      this.onVision = options.onVision || function () {};
+      this.onVisionPick = options.onVisionPick || function () {};
 
       this.ws = null;
       this.isConnected = false;
@@ -917,6 +934,8 @@ input[type="range"] {
         if (packet.type === "error") {
           this._log(`Erro do servidor: ${packet.error}`, "warn");
         }
+        if (packet.type === "vision") this.onVision(packet);
+        if (packet.type === "vision_pick_status") this.onVisionPick(packet);
 
         if (packet.type === "ack" && packet.req_id && this.pendingRequests.has(packet.req_id)) {
           const sentPerf = this.pendingRequests.get(packet.req_id);
@@ -1898,6 +1917,119 @@ input[type="range"] {
 
 </script>
   <script>
+/* Preview usa imagem e caixas do mesmo quadro; alvos são resolvidos no servidor. */
+(function (global) {
+  "use strict";
+  class VisionPanel {
+    constructor(ws, controls) {
+      this.ws = ws;
+      this.controls = controls;
+      this.busy = false;
+      this.loading = false;
+      this.packet = null;
+      this.receivedAt = 0;
+      const root = document.createElement("section");
+      root.className = "card glass-card vision-card";
+      root.innerHTML = `<div class="card-title">Visão YOLO</div>
+        <p class="vision-status" role="status">Visão em espera — aguardando comando</p>
+        <canvas class="vision-canvas" width="640" height="480" aria-label="Imagem da câmera de visão"></canvas>
+        <label>Ferramenta a pegar <select class="vision-target"><option value="dental_tool">Instrumento dental</option><option value="floss_holder">Suporte de fio dental</option></select></label>
+        <div class="vision-actions"><button class="vision-pick" disabled>Pegar ferramenta</button>
+        <button class="vision-cancel" disabled>Cancelar captura</button></div>
+        <p class="vision-operation" role="status"></p>`;
+      document.querySelector("aside")?.appendChild(root);
+      this.status = root.querySelector(".vision-status");
+      this.canvas = root.querySelector("canvas");
+      this.select = root.querySelector("select");
+      this.pick = root.querySelector(".vision-pick");
+      this.cancel = root.querySelector(".vision-cancel");
+      this.operation = root.querySelector(".vision-operation");
+      this.select.onchange = () => this.updateButtons();
+      this.pick.onclick = () => {
+        if (!this.packet || this.controls.macroRunning) return;
+        const sent = this.ws.sendCommand("vision_pick", {
+          class_name: this.select.value,
+        });
+        if (sent) { this.busy = true; this.updateButtons(); }
+      };
+      this.cancel.onclick = () => this.ws.sendCommand("vision_cancel");
+      // Polling também entrega estado inicial/reconexão, sem depender de broadcast novo.
+      this.timer = setInterval(() => this.poll(), 250);
+      this.poll();
+    }
+    apiUrl(path) {
+      const url = new URL(this.ws.url, location.href);
+      url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+      url.pathname = path; url.search = ""; url.hash = "";
+      return url;
+    }
+    updateButtons() {
+      this.pick.disabled = !this.ws.isConnected || this.busy || this.controls.macroRunning ||
+        !this.packet?.can_request_pick || !this.select.value;
+      this.cancel.disabled = !this.busy || !this.ws.isConnected;
+    }
+    setOperation(packet) {
+      this.busy = !["idle", "completed", "failed", "cancelled"].includes(packet.stage);
+      this.controls.visionRunning = this.busy;
+      const stages = {detecting: "solicitando detecção", planning: "planejando operação", revalidating: "revalidando ferramenta", idle: "aguardando", validating: "validando alvo", approaching: "aproximando",
+        aligning: "alinhando", descending: "descendo", closing: "fechando garra", lifting: "elevando", delivering: "transportando",
+        lowering: "depositando", retreating: "recuando", completed: "concluída", failed: "falhou", cancelled: "cancelada"};
+      this.operation.textContent = `Captura: ${stages[packet.stage] || packet.stage}${packet.error ? " — " + packet.error : ""}`;
+      this.updateButtons();
+    }
+    async poll() {
+      this.updateButtons();
+      if (this.loading) return;
+      this.loading = true;
+      const backend = this.ws.url;
+      try {
+        const response = await fetch(this.apiUrl("/api/vision/status"), {cache: "no-store"});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const packet = await response.json();
+        const received = performance.now();
+        if (backend !== this.ws.url) return;
+        const states = {idle: "Visão em espera — aguardando comando", detecting: "Detectando ferramenta solicitada", disabled: "Visão desligada", starting: "Iniciando visão", ready: "Detector pronto",
+          unavailable: "Detector indisponível", stale: "Aguardando observação recente", error: "Falha na visão"};
+        this.status.textContent = packet.enabled && !packet.request_active && !packet.error &&
+          ["idle", "ready"].includes(packet.status)
+          ? "Visão em espera — aguardando comando"
+          : `${states[packet.status] || packet.status}${packet.error ? " — " + packet.error : ""}`;
+        if (packet.operation) this.setOperation(packet.operation);
+        if (packet.frame_id == null || (this.packet?.frame_id === packet.frame_id && this.packet?.scene_revision === packet.scene_revision)) {
+          if (packet.frame_id == null) {
+            this.canvas.getContext("2d").clearRect(0, 0, this.canvas.width, this.canvas.height);
+          }
+          this.packet = packet; this.receivedAt = received;
+          this.updateButtons();
+          return;
+        }
+        const image = new Image();
+        const url = this.apiUrl("/api/vision/frame");
+        url.searchParams.set("frame_id", packet.frame_id);
+        image.src = url.href;
+        await image.decode();
+        if (backend !== this.ws.url) return;
+        const [width, height] = packet.image_size;
+        this.canvas.width = width; this.canvas.height = height;
+        const ctx = this.canvas.getContext("2d");
+        ctx.drawImage(image, 0, 0);
+        for (const detection of packet.detections) {
+          }
+        this.packet = packet; this.receivedAt = received;
+        this.status.textContent += ` · quadro ${packet.frame_id} · ${packet.inference_ms} ms`;
+
+        this.updateButtons();
+      } catch (error) {
+        this.status.textContent = `Visão indisponível: ${error.message}`;
+        this.packet = null; this.pick.disabled = true;
+      } finally { this.loading = false; }
+    }
+  }
+  global.VisionPanel = VisionPanel;
+})(window);
+
+</script>
+  <script>
 /**
  * controls.js
  * Gerencia botões das 8 funções da garra, jogging contínuo ao segurar,
@@ -2042,18 +2174,18 @@ input[type="range"] {
       });
 
       this.els.demoPickBtn.addEventListener("click", () => {
-        this.runDemoPickAndPlace("dental_tool");
+        this.requestVisionPick("dental_tool");
       });
 
       if (this.els.demoFlossBtn) {
         this.els.demoFlossBtn.addEventListener("click", () => {
-          this.runDemoPickAndPlace("floss_holder");
+          this.requestVisionPick("floss_holder");
         });
       }
 
       // Atalhos de teclado (ignora key-repeat automático para não enfileirar rajadas excessivas)
       window.addEventListener("keydown", (e) => {
-        if (document.activeElement === this.els.wsInput) return;
+        if (e.target?.closest("input, select, textarea, [contenteditable=true]")) return;
         const cmd = KEY_TO_COMMAND[e.code];
         if (!cmd) return;
         e.preventDefault();
@@ -2080,6 +2212,7 @@ input[type="range"] {
     }
 
     dispatchCommand(command, duration = 0.14) {
+      if (this.visionRunning) return;
       this.ws.sendCommand(command, {
         speed: this.currentSpeed,
         force: this.currentForce,
@@ -2161,49 +2294,14 @@ input[type="range"] {
       this.els.logBox.scrollTop = this.els.logBox.scrollHeight;
     }
 
-    async runDemoPickAndPlace(objectName = "dental_tool") {
-      if (this.macroRunning) return;
-      this.macroRunning = true;
-
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      this.ws.sendCommand("reset");
-      await sleep(340);
-
-      // Lê a posição física real da haste (`grasp_pos`) diretamente do snapshot do MuJoCo
-      const st0 = this.ws.lastKnownState || {};
-      const objs = Array.isArray(st0.objects) ? st0.objects : [];
-      const targetObj = objs.find((o) => o.name === objectName) || objs[0];
-      const gp = (targetObj && (targetObj.grasp_pos || targetObj.pos)) || [0.25, -0.22, 0.010];
-      const gx = Number(gp[0]);
-      const gy = Number(gp[1]);
-      const graspZ = Math.max(0.022, Number(gp[2]) + 0.014);
-      const graspForce = Math.max(45, this.currentForce);
-
-      this.appendLog(
-        `Capturando '${(targetObj && targetObj.label) || objectName}' em [${gx.toFixed(3)}, ${gy.toFixed(3)}] e entregando na zona verde...`,
-        "ok"
-      );
-
-      const steps = [
-        { cmd: "open", params: { speed: 0.65, force: 50 }, wait: 320 },
-        { cmd: "move_to", params: { target: { x: gx, y: gy, z: 0.20 }, speed: 0.65 }, wait: 1350 },
-        { cmd: "move_to", params: { target: { x: gx, y: gy, z: graspZ }, speed: 0.35 }, wait: 850 },
-        { cmd: "close", params: { speed: 0.50, force: graspForce }, wait: 650 },
-        { cmd: "move_to", params: { target: { x: gx, y: gy, z: 0.22 }, speed: 0.45 }, wait: 850 },
-        { cmd: "move_to", params: { target: { x: -0.30, y: 0.26, z: 0.22 }, speed: 0.58 }, wait: 1650 },
-        { cmd: "move_to", params: { target: { x: -0.30, y: 0.26, z: 0.042 }, speed: 0.36 }, wait: 850 },
-        { cmd: "open", params: { speed: 0.55, force: 35 }, wait: 520 },
-        { cmd: "move_to", params: { target: { x: -0.30, y: 0.26, z: 0.22 }, speed: 0.55 }, wait: 650 },
-      ];
-
-      for (const s of steps) {
-        if (!this.macroRunning) break;
-        this.ws.sendCommand(s.cmd, s.params || {});
-        await sleep(s.wait);
+    requestVisionPick(className) {
+      if (this.macroRunning || this.visionRunning) return;
+      this._stopHold();
+      if (this.ws.sendCommand("vision_pick", {class_name: className})) {
+        this.appendLog(`Comando enviado: pegar '${className}'. Solicitando detecção ao backend.`, "info");
       }
-      this.macroRunning = false;
-      this.appendLog("Pick & Place concluído na zona de entrega ao lado da cadeira.", "ok");
     }
+
   }
 
   global.SimulatorUIControls = SimulatorUIControls;
@@ -2231,6 +2329,7 @@ input[type="range"] {
     if (!canvas) return;
 
     let uiControls = null;
+    let visionPanel = null;
     const sharedOpts = {
       onFpsUpdate: (fps) => {
         if (uiControls) uiControls.updateRenderFps(fps);
@@ -2256,6 +2355,7 @@ input[type="range"] {
     }
 
     const wsClient = new GripperWebSocketClient({
+      onVisionPick: (packet) => { if (visionPanel) visionPanel.setOperation(packet); },
       onState: (state) => {
         renderer.ingestBackendState(state);
         if (uiControls) uiControls.updateTelemetryUI(state);
@@ -2274,6 +2374,7 @@ input[type="range"] {
     });
 
     uiControls = new SimulatorUIControls(wsClient, renderer);
+    visionPanel = new VisionPanel(wsClient, uiControls);
     renderer.ingestBackendState(wsClient.lastKnownState);
     renderer.start();
     wsClient.connect();

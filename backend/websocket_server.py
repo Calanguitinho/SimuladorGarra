@@ -20,11 +20,13 @@ import struct
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, parse_qs
 
 from backend.config import BackendConfig, configure_backend_logger, load_backend_config
 from backend.gripper_controller import GripperController, InvalidCommandError
 from backend.mujoco_env import MuJoCoGripperEnv
+from backend.vision_service import VisionService
+from backend.vision_pick import VisionPick
 
 WS_MAGIC_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -190,6 +192,10 @@ class GripperWebSocketServer:
         self._started_at = 0.0
         self.measured_fps: float = float(self.config.physics.broadcast_fps)
         self.bound_port: int = self.config.server.port
+        self.vision = VisionService(self.env, self.config.vision)
+        self.vision_pick = VisionPick(self.env, self.controller, self.vision)
+        self._last_vision_key = None
+        self._last_pick_status = None
 
     # ------------------------------------------------------------------------
     # Ciclo de Vida do Servidor
@@ -211,6 +217,7 @@ class GripperWebSocketServer:
             self.bound_port = sockets[0].getsockname()[1]
 
         self._running = True
+        self.vision.start()
         self._started_at = time.time()
         self._physics_task = asyncio.create_task(
             self._physics_broadcast_loop(), name="MuJoCo60FPSLoop"
@@ -236,6 +243,10 @@ class GripperWebSocketServer:
     async def stop(self) -> None:
         """Desliga a malha física, fecha sessões WebSocket e libera o socket TCP."""
         self._running = False
+        self.vision_pick.cancel()
+        if self.vision_pick.task:
+            await asyncio.gather(self.vision_pick.task, return_exceptions=True)
+        await asyncio.to_thread(self.vision.stop)
         if self._physics_task is not None:
             self._physics_task.cancel()
             try:
@@ -296,6 +307,19 @@ class GripperWebSocketServer:
                 for dead in stale:
                     self.clients.discard(dead)
 
+                vision = self.vision.snapshot()
+                key = (vision["frame_id"], vision["status"], vision["scene_revision"],
+                       vision.get("request_id"), vision["request_active"])
+                if key != self._last_vision_key:
+                    self._last_vision_key = key
+                    await asyncio.gather(*(c.send_json(vision) for c in list(self.clients)),
+                                         return_exceptions=True)
+                pick_status = dict(self.vision_pick.status)
+                if pick_status != self._last_pick_status:
+                    self._last_pick_status = pick_status
+                    await asyncio.gather(*(c.send_json(pick_status) for c in list(self.clients)),
+                                         return_exceptions=True)
+
             next_tick += frame_period
             sleep_for = next_tick - time.perf_counter()
             if sleep_for > 0:
@@ -303,6 +327,8 @@ class GripperWebSocketServer:
             else:
                 # Evita acúmulo caso o sistema operacional atrase o agendamento
                 next_tick = time.perf_counter()
+                # Mesmo sob carga, permitir detecção, comandos e timeouts progredirem.
+                await asyncio.sleep(0)
 
     # ------------------------------------------------------------------------
     # Roteador de Conexão TCP (Upgrade WebSocket vs HTTP REST / Estático)
@@ -393,6 +419,8 @@ class GripperWebSocketServer:
                 "state": self.env.get_state_snapshot(),
             }
         )
+        await session.send_json(self.vision.snapshot())
+        await session.send_json(dict(self.vision_pick.status))
 
         try:
             while self._running and not session.closed:
@@ -440,7 +468,7 @@ class GripperWebSocketServer:
             if not isinstance(msg, dict):
                 raise InvalidCommandError("Mensagem JSON deve ser um objeto.")
 
-            state = self.controller.execute_payload(msg)
+            state = self.execute_command(msg)
             response: Dict[str, Any] = {
                 "type": "ack",
                 "command": msg.get("command"),
@@ -477,6 +505,29 @@ class GripperWebSocketServer:
     # ------------------------------------------------------------------------
     # Endpoints HTTP REST + Arquivos Estáticos do Frontend
     # ------------------------------------------------------------------------
+
+    def execute_command(self, payload):
+        if not isinstance(payload, dict):
+            raise InvalidCommandError("Comando deve ser um objeto JSON.")
+        command = payload.get("command")
+        if command == "vision_cancel":
+            self.vision_pick.cancel()
+            self.vision.cancel_detection()
+        elif command == "vision_pick":
+            self.vision_pick.start(payload)
+        elif command == "vision_detect":
+            if self.vision_pick.active:
+                raise InvalidCommandError("O braço já está usando a visão nesta operação.")
+            self.vision.request_detection(payload.get("class_name"))
+        elif command == "reset":
+            self.vision_pick.cancel()
+            self.vision.cancel_detection()
+            return self.controller.execute_payload(payload)
+        else:
+            if self.vision_pick.active and command not in ("get_state", "ping"):
+                raise InvalidCommandError("Captura em andamento; cancele antes de controlar manualmente.")
+            return self.controller.execute_payload(payload)
+        return self.env.get_state_snapshot()
 
     async def _handle_http(
         self,
@@ -518,19 +569,38 @@ class GripperWebSocketServer:
             )
             return
 
+        if method == "GET" and path in ("/api/vision/status", "/api/vision/detections"):
+            packet = self.vision.snapshot()
+            packet["operation"] = dict(self.vision_pick.status)
+            await self._send_json_http(writer, 200, packet)
+            return
+
+        if method == "GET" and path == "/api/vision/frame":
+            try:
+                frame_id = int(parse_qs(parsed.query).get("frame_id", [""])[0])
+            except ValueError:
+                await self._send_json_http(writer, 400, {"error": "frame_id obrigatório e inteiro."})
+                return
+            frame = self.vision.frame(frame_id)
+            if frame is None:
+                await self._send_json_http(writer, 404, {"error": "Quadro expirado ou indisponível."})
+            else:
+                await self._send_http_response(writer, 200, "image/jpeg", frame)
+            return
+
         if method == "GET" and path == "/api/scene-manifest":
             await self._send_json_http(writer, 200, self._build_scene_manifest())
             return
 
         if method == "POST" and path == "/api/reset":
-            state = self.env.reset()
+            state = self.execute_command({"command": "reset"})
             await self._send_json_http(writer, 200, {"state": state})
             return
 
         if method == "POST" and path == "/api/command":
             try:
                 data = json.loads(body.decode("utf-8") or "{}")
-                state = self.controller.execute_payload(data)
+                state = self.execute_command(data)
                 await self._send_json_http(writer, 200, {"state": state})
             except Exception as exc:  # noqa: BLE001
                 await self._send_json_http(

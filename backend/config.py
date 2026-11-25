@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 from logging.handlers import RotatingFileHandler
@@ -65,12 +66,45 @@ class ServerConfig:
 
 
 @dataclass(frozen=True)
+class VisionConfig:
+    enabled: bool = False
+    model_path: Path = PROJECT_ROOT / "models/vision/odontologia.pt"
+    calibration_path: Path = PROJECT_ROOT / "models/vision/calibration.json"
+    camera_name: str = "vision_top"
+    width: int = 640
+    height: int = 480
+    imgsz: int = 320
+    device: str = "cpu"
+    cpu_threads: int = 2
+    target_fps: float = 10.0
+    confidence_threshold: float = 0.60
+    max_age_ms: float = 300.0
+    stable_frames: int = 3
+    stability_m: float = 0.008
+    enable_pick: bool = False
+    allowed_classes: Tuple[str, ...] = ("dental_tool", "floss_holder")
+
+    def __post_init__(self) -> None:
+        if not (64 <= self.width <= 1920 and 64 <= self.height <= 1080):
+            raise ValueError("Resolução de visão deve estar entre 64x64 e 1920x1080.")
+        if not (64 <= self.imgsz <= 1920):
+            raise ValueError("imgsz inválido.")
+        for name in ("target_fps", "confidence_threshold", "max_age_ms", "stability_m"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"Configuração de visão inválida: {name}")
+        if self.target_fps > 60 or self.confidence_threshold > 1 or self.stable_frames < 1 or not 1 <= self.cpu_threads <= 32:
+            raise ValueError("FPS, confiança ou estabilidade de visão inválidos.")
+
+
+@dataclass(frozen=True)
 class BackendConfig:
     """Configuração consolidada do backend."""
 
     physics: PhysicsConfig = field(default_factory=PhysicsConfig)
     gripper: GripperConfig = field(default_factory=GripperConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    vision: VisionConfig = field(default_factory=VisionConfig)
     frontend_dir: Path = FRONTEND_DIR
     assets_dir: Path = ASSETS_DIR
     logs_dir: Path = LOGS_DIR
@@ -83,6 +117,7 @@ def load_backend_config(
     fps: int | None = None,
     mjcf_path: str | Path | None = None,
     log_level: str | None = None,
+    vision: VisionConfig | None = None,
 ) -> BackendConfig:
     """Cria `BackendConfig` aplicando sobrescritas de CLI ou variáveis de ambiente."""
     phys_default = PhysicsConfig()
@@ -102,7 +137,8 @@ def load_backend_config(
         port=int(port) if port is not None else srv_default.port,
         log_level=(log_level or srv_default.log_level).upper(),
     )
-    return BackendConfig(physics=physics, gripper=GripperConfig(), server=server)
+    return BackendConfig(physics=physics, gripper=GripperConfig(), server=server,
+                         vision=vision or VisionConfig())
 
 
 def configure_backend_logger(

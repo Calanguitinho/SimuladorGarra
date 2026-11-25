@@ -141,3 +141,14 @@ Existem **duas formas imediatas** sem precisar recompilar o código:
 
 2. **Diretamente na Barra Superior da Interface 3D**:
    - Digite `ws://203.0.113.42:8000/ws` no campo de endereço WebSocket no topo da tela e clique em **Conectar**.
+# Extensão opcional de visão YOLO
+
+Instale `requirements-vision.txt` no ambiente do backend e provisione os pesos locais e o manifesto de hash/classes em `models/vision/`. Nunca dependa de download durante uma captura. O detector é carregado na primeira solicitação e reutilizado na thread de visão. Em repouso não há captura ou inferência; a primeira operação pode demorar mais pelo carregamento do modelo. Reinicie o servidor para trocar pesos ou calibração.
+
+Execute `python main.py --vision --vision-model models/vision/odontologia.pt`. CPU é o padrão; configure `--vision-device` somente após validar o runtime PyTorch e a GPU no host. O renderer offscreen requer um contexto gráfico suportado pelo MuJoCo instalado. A renderização foi exercitada com o renderer clássico no Windows; Linux sem tela e GPU/CUDA exigem validação no destino, sem assumir equivalência.
+
+O healthcheck geral `/health` mede o servidor; `/api/vision/status` informa separadamente disponibilidade, erro e idade das observações. Sem pesos/calibração válidos, a câmera pode continuar funcionando com detector indisponível. O fallback cinemático não oferece a câmera nativa.
+
+O preview usa JPEG separado do estado físico e cache limitado a quatro quadros. A interface resolve a URL da API a partir da conexão WS configurada, inclusive no standalone remoto. Configure CORS/proxy/TLS para essa mesma origem de backend. O bundle continua dependendo da cena Three.js e dos assets já documentados.
+
+Registre versões de Python, MuJoCo, Ultralytics/PyTorch, hash dos pesos, calibração, hardware e métricas antes de promover a captura. Imagens de treino e `.pt` são ignorados pelo Git; preserve-os em armazenamento de artefatos junto com o manifesto. A flag `--vision-enable-pick` só libera captura se pesos e calibração também tiverem `validated_for_pick: true`, após ensaio físico documentado.

@@ -14,7 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.config import configure_backend_logger, load_backend_config  # noqa: E402
+from backend.config import VisionConfig, configure_backend_logger, load_backend_config  # noqa: E402
 from backend.websocket_server import GripperWebSocketServer  # noqa: E402
 
 
@@ -54,6 +54,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="INFO",
         help="Nível de log do servidor (padrão: INFO).",
     )
+    parser.add_argument("--vision", action="store_true", help="Ativar câmera e detector YOLO opcional.")
+    parser.add_argument("--vision-model", type=Path, default=VisionConfig().model_path)
+    parser.add_argument("--vision-calibration", type=Path, default=VisionConfig().calibration_path)
+    parser.add_argument("--vision-device", default="cpu")
+    parser.add_argument("--vision-imgsz", type=int, default=VisionConfig().imgsz)
+    parser.add_argument("--vision-threads", type=int, default=VisionConfig().cpu_threads)
+    parser.add_argument("--vision-fps", type=float, default=10.0)
+    parser.add_argument("--vision-confidence", type=float, default=0.60)
+    parser.add_argument("--vision-max-age-ms", type=float, default=300.0)
+    parser.add_argument("--vision-enable-pick", action="store_true",
+                        help="Habilitar captura; exige calibração e manifesto validados.")
     return parser
 
 
@@ -64,6 +75,14 @@ async def _run_async_server(args: argparse.Namespace) -> int:
         fps=args.fps,
         mjcf_path=args.model,
         log_level=args.log_level,
+        vision=VisionConfig(enabled=args.vision, model_path=args.vision_model,
+                            calibration_path=args.vision_calibration,
+                            device=args.vision_device, target_fps=args.vision_fps,
+                            imgsz=args.vision_imgsz,
+                            cpu_threads=args.vision_threads,
+                            confidence_threshold=args.vision_confidence,
+                            max_age_ms=args.vision_max_age_ms,
+                            enable_pick=args.vision_enable_pick),
     )
     logger = configure_backend_logger("BackendMain", level=cfg.server.log_level)
     server = GripperWebSocketServer(config=cfg, logger=logger)

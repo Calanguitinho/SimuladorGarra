@@ -2,6 +2,39 @@
 
 Este documento define o contrato de comunicação em tempo real entre o **Backend Python + MuJoCo** (`backend/websocket_server.py`) e o **Frontend 3D no Navegador** (`frontend/js/websocket_client.js`).
 
+## Extensão de visão YOLO: fluxo por comando
+
+O comando do braço inicia a percepção. Habilitar `--vision`, consultar status ou abrir a interface não captura imagens. O worker espera uma solicitação explícita e executa uma coleta finita: até `max(3, stable_frames * 2)` quadros, encerrando antes se o alvo ficar estável. `--vision-fps` limita a cadência apenas durante essa coleta.
+
+Fluxo: comando → detecção da ferramenta → validação do retorno → cálculo do plano → execução. O braço solicita uma segunda coleta pontual para revalidar a ferramenta após aproximar-se. Não existe captura contínua enquanto aguarda ou movimenta o objeto.
+
+```json
+{"command":"vision_pick","class_name":"dental_tool"}
+```
+
+`class_name` aceita `dental_tool` ou `floss_holder`. O cliente não precisa enviar quadro, detecção ou coordenadas. O backend obtém uma observação nova, resolve o alvo internamente e publica `plan` antes de comandar os atuadores. Ausência, ambiguidade, timeout ou geometria inválida encerram a operação sem iniciar movimento.
+
+Para diagnóstico sem movimento, há um comando explícito separado:
+
+```json
+{"command":"vision_detect","class_name":"floss_holder"}
+```
+
+`vision_cancel` cancela a operação e/ou solicitação de visão; `reset` também invalida a revisão. Uma inferência que já começou pode terminar, mas seu resultado cancelado não é publicado nem usado por outra operação.
+
+| Interface | Contrato |
+| --- | --- |
+| `GET /api/vision/status` e `/api/vision/detections` | Somente leitura; nunca acionam a câmera. Incluem `operation`, `request_active`, `request_id`, `requested_class`, `frames_captured`, `allowed_classes` e `can_request_pick` |
+| `GET /api/vision/frame?frame_id=125` | JPEG de uma coleta já solicitada; não produz nova imagem; 404 se saiu do cache ou houve reset |
+| WS `vision` | Atualizações da solicitação e resultados; inclui estado `idle`/`detecting` e estados de resultado `ready`/`stale`/`error`, além de `disabled` |
+| WS `vision_pick_status` | `operation_id`, classe solicitada, etapa, erro, alvo estimado, plano e plano restante após revalidação |
+
+O `ack` confirma recebimento. A conclusão é informada pela operação: `detecting`, `planning`, `approaching`, `revalidating`, `aligning`, `descending`, `closing`, `lifting`, `delivering`, `lowering`, `retreating`, com terminais `completed`, `failed` ou `cancelled`.
+
+As detecções mantêm caixa em pixels, classe, confiança, estabilidade e candidato em metros. O cache contém no máximo quatro quadros. A idade usa relógio monotônico e continua sendo validada antes de usar um resultado. Uma imagem antiga pode permanecer no preview como última observação; isso não mantém a visão capturando.
+
+O alinhamento/descida usa o ponto revalidado por até seis segundos sob possível oclusão, pressupondo bancada estática. O contrato físico `state` e os comandos manuais existentes permanecem disponíveis.
+
 ---
 
 ## 1. Transporte e Conexão

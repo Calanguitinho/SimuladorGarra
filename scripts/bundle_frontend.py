@@ -20,6 +20,7 @@ def build_single_file_frontend() -> Path:
     ws_js = (FRONTEND_DIR / "js" / "websocket_client.js").read_text(encoding="utf-8")
     renderer_js = (FRONTEND_DIR / "js" / "renderer.js").read_text(encoding="utf-8")
     controls_js = (FRONTEND_DIR / "js" / "controls.js").read_text(encoding="utf-8")
+    vision_js = (FRONTEND_DIR / "js" / "vision_panel.js").read_text(encoding="utf-8")
 
     html = html.replace(
         '<link rel="stylesheet" href="css/style.css" />',
@@ -37,6 +38,8 @@ def build_single_file_frontend() -> Path:
         '<script src="js/controls.js"></script>',
         f"<script>\n{controls_js}\n</script>",
     )
+    html = html.replace('<script src="js/vision_panel.js"></script>',
+                        f"<script>\n{vision_js}\n</script>")
     # dental_scene.js é ES module (Three.js CDN) — mantém referência relativa;
     # no standalone, o backend ainda precisa servir /js/dental_scene.js + /assets/.
     # (Não inline: depende de importmap + three/addons.)

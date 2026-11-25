@@ -1,0 +1,52 @@
+{
+  "id": "odontologia",
+  "sha256": "053ea2a4e5654ade2d1c18545173e84e9bbed0b6fa6d20d8334674e58d58f5f7",
+  "classes": [
+    "dental_tool",
+    "floss_holder"
+  ],
+  "validated_for_pick": false,
+  "ultralytics": "8.4.216",
+  "torch": "2.15.0+cpu",
+  "epochs": 50,
+  "seed": 20261123,
+  "data": "datasets/odontologia/data.yaml",
+  "epochs_completed": 50,
+  "training": {
+    "initializer": "models/vision/yolo_dental.yaml",
+    "imgsz": 320,
+    "batch": 8,
+    "threads": 2,
+    "optimizer": "AdamW",
+    "lr0": 0.002,
+    "nbs": 8,
+    "pretrained": false
+  },
+  "dataset_manifest": {
+    "seed": 20261123,
+    "count": 120,
+    "classes": [
+      "dental_tool",
+      "floss_holder"
+    ],
+    "mujoco": "4.0.1",
+    "scene_sha256": "4c00e4767fb2f6c55079a03a56f5d294c90e38555f4b8dfcdaea2bb5840c3e2a",
+    "annotation": "visible visual-mesh segmentation; no collision proxies",
+    "limitations": "Synthetic fixed camera, narrow yaw, randomized positions/background/light; no real camera validation."
+  },
+  "test_metrics": {
+    "metrics/precision(B)": 0.8984850452384209,
+    "metrics/recall(B)": 1.0,
+    "metrics/mAP50(B)": 0.9776041666666666,
+    "metrics/mAP50-95(B)": 0.5916412830225329,
+    "fitness": 0.5916412830225329
+  },
+  "selection": {
+    "preprocessing": "square letterbox rect=False",
+    "validation_candidates": {
+      "best": 0.5238330832362083,
+      "last": 0.583198697683895
+    },
+    "selected": "last"
+  }
+}

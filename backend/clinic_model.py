@@ -41,6 +41,23 @@ def build_clinic_spec() -> mujoco.MjSpec:
     spec.option.noslip_iterations = 6
     spec.option.noslip_tolerance = 1e-5
 
+    # Câmera de percepção independente da câmera orbital do navegador.
+    camera = spec.worldbody.add_camera()
+    camera.name = "vision_top"
+    camera.pos = [0.28, -0.75, 0.60]
+    # Vista frontal inclinada evita que antebraço/punho cubram toda a bandeja.
+    forward = np.array([0.28, -0.22, 0.0]) - np.asarray(camera.pos)
+    forward /= np.linalg.norm(forward)
+    right = np.cross(forward, [0.0, 0.0, 1.0])
+    right /= np.linalg.norm(right)
+    up = np.cross(right, forward)
+    quat = np.zeros(4)
+    mujoco.mju_mat2Quat(quat, np.column_stack((right, up, -forward)).ravel())
+    camera.quat = quat
+    camera.fovy = 45
+    spec.visual.global_.offwidth = 1920
+    spec.visual.global_.offheight = 1080
+
     # Acabamento branco tipo braço industrial (HIWIN / UR)
     for mat in spec.materials:
         if mat.name == "urblue":
